@@ -1,0 +1,60 @@
+# ============================================================
+# Data Pipeline Configuration
+# ============================================================
+
+# --- Datasets ---
+datasets:
+  primary: "starvector/svg-icons-simple"
+  supplementary:
+    - "starvector/svg-emoji-simple"
+    - "starvector/svg-fonts-simple"    # subsample if needed
+    - "starvector/svg-stack-simple"    # subsample if needed
+
+  # Target total training tokens
+  target_train_tokens: 100_000_000
+
+  # fonts/stack subsample fraction (applied if we need more tokens)
+  fonts_subsample_fraction: 0.05
+  stack_subsample_fraction: 0.02
+
+# --- SVG Cleaning ---
+cleaning:
+  min_length_chars: 50          # discard SVGs shorter than this (post-clean)
+  max_token_length: 1024        # discard SVGs with more tokens than this
+  decimal_places: 1             # round floats in SVG attributes/paths
+  strip_comments: true
+  strip_processing_instructions: true  # <?xml ...?>
+  strip_metadata_blocks: true          # <metadata>, <desc>, <title>
+  validate_xml: true
+  deduplicate: true             # MD5 hash deduplication
+
+# --- Tokenizer ---
+tokenizer:
+  vocab_size: 4096
+  type: "BPE"
+  pre_tokenizer: "ByteLevel"    # handles all Unicode via raw bytes
+  special_tokens:
+    pad: "<PAD>"    # id 0
+    bos: "<BOS>"    # id 1
+    eos: "<EOS>"    # id 2
+    unk: "<UNK>"    # id 3
+
+# --- Data Splitting ---
+splitting:
+  train_fraction: 0.98
+  val_fraction: 0.01
+  test_fraction: 0.01
+  seed: 42                      # for reproducible splits
+
+# --- Output Paths ---
+paths:
+  raw_data_dir: "outputs/data/raw"
+  cleaned_data_dir: "outputs/data/cleaned"
+  tokenizer_dir: "outputs/tokenizer"
+  binary_dir: "outputs/data/binary"
+  stats_file: "outputs/data/dataset_stats.json"
+  plots_dir: "outputs/plots"
+
+# --- Misc ---
+num_workers: 4                  # DataLoader / parallel processing workers
+seed: 42
