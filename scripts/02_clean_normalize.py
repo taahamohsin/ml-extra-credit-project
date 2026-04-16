@@ -132,15 +132,20 @@ def debug_sample(raw_file: Path, min_length_chars: int, sample_size: int = 500) 
     print(f"  Raw   ({len(raw):>6} chars): {raw[:300]!r}")
     print(f"  Clean ({len(cleaned) if cleaned else 0:>6} chars): {(cleaned or '')[:300]!r}")
 
-    # Show the first float in raw and what it became after rounding
+    # Show float rounding by applying _round_floats directly to a short snippet
     import re
-    floats_raw     = re.findall(r"-?\d+\.\d+", raw)
-    floats_cleaned = re.findall(r"-?\d+\.\d+", cleaned or "")
+    from src.svg_utils import _round_floats
+    floats_raw = re.findall(r"-?\d+\.\d+", raw)
     if floats_raw:
-        print(f"\n  Float rounding examples (raw → cleaned):")
-        for r_val, c_val in zip(floats_raw[:6], floats_cleaned[:6]):
-            changed = " ← ROUNDED" if r_val != c_val else ""
-            print(f"    {r_val}  →  {c_val}{changed}")
+        print(f"\n  Float rounding examples (raw → rounded):")
+        seen = []
+        for r_val in floats_raw:
+            rounded = _round_floats(r_val, decimal_places=1)
+            if r_val != rounded and (r_val, rounded) not in seen:
+                print(f"    {r_val}  →  {rounded}")
+                seen.append((r_val, rounded))
+            if len(seen) >= 6:
+                break
 
 
 # ---------------------------------------------------------------------------
