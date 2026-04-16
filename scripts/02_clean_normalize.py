@@ -67,7 +67,7 @@ def debug_xml_validation() -> None:
         (True,  "good SVG",           '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>'),
         (False, "unclosed tag",       '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="12"</svg>'),
         (False, "mismatched tags",    '<svg xmlns="http://www.w3.org/2000/svg"><rect></circle></svg>'),
-        (False, "unclosed attribute", '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 unclosed attr="/></svg>'),
+        (False, "unquoted attribute",  '<svg xmlns="http://www.w3.org/2000/svg"><path d=M0></path></svg>'),
     ]
     all_ok = True
     for expected, label, test_svg in cases:
