@@ -56,13 +56,39 @@ def iter_jsonl(path: Path):
                 continue
 
 
-def debug_sample(raw_file: Path, min_length_chars: int, decimal_places: int, sample_size: int = 500) -> None:
+def debug_xml_validation() -> None:
     """
-    Print diagnostic information about the raw SVG file:
+    Verify lxml is doing real XML parsing by running known-good and
+    known-bad SVGs through is_valid_xml. Runs unconditionally at startup,
+    before any file processing.
+    """
+    print("\n[DEBUG] XML validation spot-check (runs before any file processing):")
+    cases = [
+        (True,  "good SVG",           '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>'),
+        (False, "unclosed tag",       '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="12"</svg>'),
+        (False, "mismatched tags",    '<svg xmlns="http://www.w3.org/2000/svg"><rect></circle></svg>'),
+        (False, "unclosed attribute", '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 unclosed attr="/></svg>'),
+    ]
+    all_ok = True
+    for expected, label, test_svg in cases:
+        result = is_valid_xml(test_svg)
+        ok = result == expected
+        status = "PASS" if ok else "FAIL"
+        if not ok:
+            all_ok = False
+        print(f"  [{status}] {label}: expected={expected}, got={result}")
+    if all_ok:
+        print("  All checks passed — lxml is correctly parsing XML.")
+    else:
+        print("  WARNING: Some checks failed — XML validation may not be working correctly!")
+
+
+def debug_sample(raw_file: Path, min_length_chars: int, sample_size: int = 500) -> None:
+    """
+    Print diagnostic information about a raw SVG file:
       1. Shortest SVG lengths (to check if any approach the threshold)
       2. Duplicate rate (MD5 on raw strings before cleaning)
-      3. Three SVGs nearest to the length threshold (so we can see what's borderline)
-      4. Spot-check that lxml XML validation is actually rejecting bad XML
+      3. Three SVGs nearest to the length threshold
     """
     print(f"\n[DEBUG] Sampling first {sample_size} SVGs from {raw_file.name} ...")
 
@@ -97,28 +123,6 @@ def debug_sample(raw_file: Path, min_length_chars: int, decimal_places: int, sam
     for i, s in enumerate(by_dist[:3]):
         print(f"  Example {i+1}: raw_len={len(s)}")
         print(f"    {repr(s[:200])}")
-
-    # 4. Verify lxml is actually doing real XML parsing (not just checking "<svg")
-    print("\n[DEBUG] XML validation spot-check:")
-
-    # Known-good SVG
-    good_svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>'
-    # Intentionally broken: unclosed tag
-    bad_svg_unclosed = '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="12"</svg>'
-    # Intentionally broken: mismatched tags
-    bad_svg_mismatch = '<svg xmlns="http://www.w3.org/2000/svg"><rect></circle></svg>'
-    # Looks like SVG (contains "<svg") but is not valid XML
-    bad_svg_contains_tag = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 unclosed attr="/></svg>'
-
-    for label, test_svg in [
-        ("good SVG (should pass)", good_svg),
-        ("unclosed tag (should fail)", bad_svg_unclosed),
-        ("mismatched tags (should fail)", bad_svg_mismatch),
-        ("unclosed attr (should fail)", bad_svg_contains_tag),
-    ]:
-        result = is_valid_xml(test_svg)
-        status = "PASS" if (result == (label == "good SVG (should pass)")) else "UNEXPECTED"
-        print(f"  [{status}] {label}: is_valid_xml={result}")
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +162,9 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     for f in raw_files:
         print(f"  {f}")
 
+    # Run XML validation spot-check immediately — before touching any files
+    debug_xml_validation()
+
     # -----------------------------------------------------------------------
     # Cleaning loop
     # -----------------------------------------------------------------------
@@ -184,7 +191,7 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
                 continue
 
             print(f"\nCleaning {raw_file.name} ...")
-            debug_sample(raw_file, cleaning_cfg["min_length_chars"], cleaning_cfg["decimal_places"])
+            debug_sample(raw_file, cleaning_cfg["min_length_chars"])
             file_in = 0
             file_ok = 0
 
