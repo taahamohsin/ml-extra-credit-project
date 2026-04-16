@@ -77,7 +77,11 @@ def train_tokenizer(
             print(f"Deleted stale tokenizer: {stale}")
 
     tokenizer = Tokenizer(BPE(unk_token=UNK_TOKEN))
-    tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
+    # use_regex=False disables the GPT-2 regex splitter, which collapses SVG
+    # symbol/punctuation runs into ~88 unique word types and caps vocab at 161.
+    # SVG has no linguistic word boundaries — we want BPE to learn merges
+    # freely across the full byte stream of each line.
+    tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False, use_regex=False)
     tokenizer.decoder = ByteLevelDecoder()
 
     trainer = BpeTrainer(
@@ -85,6 +89,9 @@ def train_tokenizer(
         special_tokens=SPECIAL_TOKENS,
         min_frequency=2,
         show_progress=True,
+        # Seed the vocab with all 256 possible bytes so the base alphabet is
+        # always complete, regardless of which bytes appear in this corpus.
+        initial_alphabet=ByteLevel.alphabet(),
     )
 
     # Write corpus to a temp file and use tokenizer.train() (file-based API).
