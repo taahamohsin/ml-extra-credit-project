@@ -124,6 +124,24 @@ def debug_sample(raw_file: Path, min_length_chars: int, sample_size: int = 500) 
         print(f"  Example {i+1}: raw_len={len(s)}")
         print(f"    {repr(s[:200])}")
 
+    # 4. Before/after cleaning on the first SVG — verify transformations are applied
+    print("\n[DEBUG] Before/after cleaning (first SVG):")
+    raw = svgs[0]
+    cleaned, reason = clean_svg(raw, decimal_places=1, min_length_chars=min_length_chars)
+    print(f"  Status: {reason}")
+    print(f"  Raw   ({len(raw):>6} chars): {raw[:300]!r}")
+    print(f"  Clean ({len(cleaned) if cleaned else 0:>6} chars): {(cleaned or '')[:300]!r}")
+
+    # Show the first float in raw and what it became after rounding
+    import re
+    floats_raw     = re.findall(r"-?\d+\.\d+", raw)
+    floats_cleaned = re.findall(r"-?\d+\.\d+", cleaned or "")
+    if floats_raw:
+        print(f"\n  Float rounding examples (raw → cleaned):")
+        for r_val, c_val in zip(floats_raw[:6], floats_cleaned[:6]):
+            changed = " ← ROUNDED" if r_val != c_val else ""
+            print(f"    {r_val}  →  {c_val}{changed}")
+
 
 # ---------------------------------------------------------------------------
 # Main
