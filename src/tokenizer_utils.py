@@ -69,6 +69,13 @@ def train_tokenizer(
     Tokenizer
         A trained HuggingFace tokenizer.
     """
+    # Delete any existing tokenizer so we never silently use a stale cached file
+    if save_dir is not None:
+        stale = Path(save_dir) / "tokenizer.json"
+        if stale.exists():
+            stale.unlink()
+            print(f"Deleted stale tokenizer: {stale}")
+
     tokenizer = Tokenizer(BPE(unk_token=UNK_TOKEN))
     tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
     tokenizer.decoder = ByteLevelDecoder()
@@ -80,22 +87,26 @@ def train_tokenizer(
         show_progress=True,
     )
 
-    # Write corpus to a temp file and use train_from_files, which is what
-    # the HuggingFace BpeTrainer is optimized for. train_from_iterator with
-    # very long single-line documents (our SVGs are one line each after
-    # whitespace collapsing) causes the trainer to see far fewer "words" than
-    # expected, resulting in a tiny vocabulary.
+    # Write corpus to a temp file and use tokenizer.train() (file-based API).
+    # train_from_iterator on very long single-line documents produces a tiny
+    # vocabulary because the HuggingFace BPE trainer processes the file in
+    # line-sized chunks; with ~80k single-line SVGs it only saw 88 "documents"
+    # in its internal batch, exhausting merges at vocab_size=161.
     import tempfile, os
+    print(f"Writing {len(svg_texts):,} SVGs to temp file for tokenizer training ...")
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
                                      delete=False, encoding="utf-8") as tmp:
         tmp_path = tmp.name
         for text in svg_texts:
             tmp.write(text + "\n")
+    print(f"Temp file: {tmp_path}  ({os.path.getsize(tmp_path) / 1e6:.1f} MB)")
 
     try:
+        print("Training tokenizer from file ...")
         tokenizer.train([tmp_path], trainer=trainer)
     finally:
         os.unlink(tmp_path)
+        print("Temp file deleted.")
 
     # Add post-processing so encode() automatically wraps with BOS/EOS
     tokenizer.post_processor = TemplateProcessing(
