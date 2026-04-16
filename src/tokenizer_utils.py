@@ -80,11 +80,22 @@ def train_tokenizer(
         show_progress=True,
     )
 
-    def _text_iterator() -> Iterator[str]:
+    # Write corpus to a temp file and use train_from_files, which is what
+    # the HuggingFace BpeTrainer is optimized for. train_from_iterator with
+    # very long single-line documents (our SVGs are one line each after
+    # whitespace collapsing) causes the trainer to see far fewer "words" than
+    # expected, resulting in a tiny vocabulary.
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
+                                     delete=False, encoding="utf-8") as tmp:
+        tmp_path = tmp.name
         for text in svg_texts:
-            yield text
+            tmp.write(text + "\n")
 
-    tokenizer.train_from_iterator(_text_iterator(), trainer=trainer, length=len(svg_texts))
+    try:
+        tokenizer.train([tmp_path], trainer=trainer)
+    finally:
+        os.unlink(tmp_path)
 
     # Add post-processing so encode() automatically wraps with BOS/EOS
     tokenizer.post_processor = TemplateProcessing(
