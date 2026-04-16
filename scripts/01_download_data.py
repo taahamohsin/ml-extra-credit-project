@@ -34,13 +34,23 @@ sys.path.insert(0, str(REPO_ROOT))
 # Helpers
 # ---------------------------------------------------------------------------
 
+def debug_dataset_structure(ds, dataset_name: str) -> None:
+    """Print column names and first example so we can see the actual schema."""
+    print(f"\n[DEBUG] {dataset_name} — column names: {ds.column_names}")
+    ex = ds[0]
+    print("[DEBUG] First example:")
+    for k, v in ex.items():
+        preview = repr(v)[:200] if not isinstance(v, str) else repr(v[:200])
+        print(f"  {k!r}: {type(v).__name__} = {preview}")
+
+
 def get_svg_field(example: dict) -> str | None:
     """
     Extract the SVG string from a dataset example.
-    StarVector datasets use the field name 'svg' or 'image' (SVG text).
-    Try both.
+    Tries common column names used across StarVector datasets,
+    including both lowercase and title-case variants.
     """
-    for key in ("svg", "image", "svg_code", "text"):
+    for key in ("Svg", "svg", "SVG", "image", "svg_code", "text"):
         val = example.get(key)
         if isinstance(val, str) and val.strip():
             return val.strip()
@@ -69,12 +79,13 @@ def load_and_collect(
     """Load a HuggingFace dataset and collect raw SVG strings."""
     print(f"\nLoading {dataset_name} (split={split}) ...")
     try:
-        ds = load_dataset(dataset_name, split=split, trust_remote_code=True)
+        ds = load_dataset(dataset_name, split=split)
     except Exception as e:
         print(f"  WARNING: Could not load {dataset_name}: {e}")
         return []
 
     print(f"  Raw dataset size: {len(ds):,} examples")
+    debug_dataset_structure(ds, dataset_name)
 
     # Optional subsampling
     if subsample_fraction is not None and subsample_fraction < 1.0:
