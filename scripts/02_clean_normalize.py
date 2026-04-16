@@ -24,6 +24,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -34,7 +35,7 @@ from tqdm import tqdm
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.svg_utils import clean_svg, md5_hash
+from src.svg_utils import clean_svg, md5_hash, is_valid_xml
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +54,71 @@ def iter_jsonl(path: Path):
                 yield obj.get("svg", ""), obj.get("source", "unknown")
             except json.JSONDecodeError:
                 continue
+
+
+def debug_sample(raw_file: Path, min_length_chars: int, decimal_places: int, sample_size: int = 500) -> None:
+    """
+    Print diagnostic information about the raw SVG file:
+      1. Shortest SVG lengths (to check if any approach the threshold)
+      2. Duplicate rate (MD5 on raw strings before cleaning)
+      3. Three SVGs nearest to the length threshold (so we can see what's borderline)
+      4. Spot-check that lxml XML validation is actually rejecting bad XML
+    """
+    print(f"\n[DEBUG] Sampling first {sample_size} SVGs from {raw_file.name} ...")
+
+    svgs = []
+    for raw_svg, _ in iter_jsonl(raw_file):
+        svgs.append(raw_svg)
+        if len(svgs) >= sample_size:
+            break
+
+    if not svgs:
+        print("[DEBUG] No SVGs loaded — file may be empty or unreadable.")
+        return
+
+    # 1. Length distribution
+    lengths = sorted(len(s) for s in svgs)
+    print("\n[DEBUG] Character lengths (raw, before cleaning):")
+    print(f"  min={lengths[0]}, p5={lengths[len(lengths)//20]}, "
+          f"median={lengths[len(lengths)//2]}, max={lengths[-1]}")
+    print(f"  SVGs below {min_length_chars} chars: "
+          f"{sum(1 for n in lengths if n < min_length_chars)} / {len(lengths)}")
+
+    # 2. Duplicate check (on raw strings)
+    raw_hashes = [hashlib.md5(s.encode()).hexdigest() for s in svgs]
+    n_unique = len(set(raw_hashes))
+    print("\n[DEBUG] Deduplication (raw strings, before cleaning):")
+    print(f"  Unique MD5 hashes: {n_unique} / {len(svgs)} "
+          f"({100 * (len(svgs) - n_unique) / len(svgs):.1f}% duplicates)")
+
+    # 3. Three SVGs closest to the length threshold
+    by_dist = sorted(svgs, key=lambda s: abs(len(s) - min_length_chars))
+    print(f"\n[DEBUG] 3 SVGs nearest to length threshold ({min_length_chars} chars):")
+    for i, s in enumerate(by_dist[:3]):
+        print(f"  Example {i+1}: raw_len={len(s)}")
+        print(f"    {repr(s[:200])}")
+
+    # 4. Verify lxml is actually doing real XML parsing (not just checking "<svg")
+    print("\n[DEBUG] XML validation spot-check:")
+
+    # Known-good SVG
+    good_svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>'
+    # Intentionally broken: unclosed tag
+    bad_svg_unclosed = '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="12"</svg>'
+    # Intentionally broken: mismatched tags
+    bad_svg_mismatch = '<svg xmlns="http://www.w3.org/2000/svg"><rect></circle></svg>'
+    # Looks like SVG (contains "<svg") but is not valid XML
+    bad_svg_contains_tag = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 unclosed attr="/></svg>'
+
+    for label, test_svg in [
+        ("good SVG (should pass)", good_svg),
+        ("unclosed tag (should fail)", bad_svg_unclosed),
+        ("mismatched tags (should fail)", bad_svg_mismatch),
+        ("unclosed attr (should fail)", bad_svg_contains_tag),
+    ]:
+        result = is_valid_xml(test_svg)
+        status = "PASS" if (result == (label == "good SVG (should pass)")) else "UNEXPECTED"
+        print(f"  [{status}] {label}: is_valid_xml={result}")
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +184,7 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
                 continue
 
             print(f"\nCleaning {raw_file.name} ...")
+            debug_sample(raw_file, cleaning_cfg["min_length_chars"], cleaning_cfg["decimal_places"])
             file_in = 0
             file_ok = 0
 
