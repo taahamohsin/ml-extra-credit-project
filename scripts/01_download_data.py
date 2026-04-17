@@ -135,11 +135,12 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     icons_svgs = load_and_collect(primary_name)
     save_raw_svgs(icons_svgs, raw_dir / "icons_simple.jsonl", source_name="icons-simple")
 
-    # We estimate tokens roughly as: 1 char ≈ 0.4 tokens for SVG with BPE-4096
-    # (This is a rough heuristic — actual count computed after tokenization.)
-    total_chars = sum(len(s) for s in icons_svgs)
-    estimated_tokens = int(total_chars * 0.4)
-    print(f"\nEstimated tokens from icons-simple: {estimated_tokens:,} (rough heuristic)")
+    # Measured token rate from icons-simple run: ~220 tokens/SVG after BPE-4096
+    # (17,726,467 tokens / 80,434 SVGs = 220.4). Use SVG count as the estimator
+    # rather than character count, which was wildly off (old: 0.4 chars/token).
+    TOKENS_PER_SVG = 220
+    estimated_tokens = len(icons_svgs) * TOKENS_PER_SVG
+    print(f"\nEstimated tokens from icons-simple: {estimated_tokens:,} (~{TOKENS_PER_SVG} tok/SVG)")
 
     all_files = ["icons_simple.jsonl"]
 
@@ -155,8 +156,7 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
         if emoji_svgs:
             save_raw_svgs(emoji_svgs, raw_dir / "emoji_simple.jsonl", source_name="emoji-simple")
             all_files.append("emoji_simple.jsonl")
-            total_chars += sum(len(s) for s in emoji_svgs)
-            estimated_tokens = int(total_chars * 0.4)
+            estimated_tokens += len(emoji_svgs) * TOKENS_PER_SVG
             print(f"Updated estimated tokens (after emoji): {estimated_tokens:,}")
 
     # -----------------------------------------------------------------------
@@ -169,8 +169,7 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
         if fonts_svgs:
             save_raw_svgs(fonts_svgs, raw_dir / "fonts_simple.jsonl", source_name="fonts-simple")
             all_files.append("fonts_simple.jsonl")
-            total_chars += sum(len(s) for s in fonts_svgs)
-            estimated_tokens = int(total_chars * 0.4)
+            estimated_tokens += len(fonts_svgs) * TOKENS_PER_SVG
             print(f"Updated estimated tokens (after fonts): {estimated_tokens:,}")
 
     # -----------------------------------------------------------------------
