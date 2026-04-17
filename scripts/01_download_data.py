@@ -117,7 +117,7 @@ def load_and_collect(
 # Main
 # ---------------------------------------------------------------------------
 
-def main(config_path: str = "configs/data_config.yaml") -> None:
+def main(config_path: str = "configs/data_config.yaml", fonts_only: bool = False) -> None:
     config_file = REPO_ROOT / config_path
     with open(config_file) as f:
         cfg = yaml.safe_load(f)
@@ -128,6 +128,53 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     datasets_cfg = cfg["datasets"]
     target_tokens = datasets_cfg["target_train_tokens"]
 
+    TOKENS_PER_SVG = 220  # measured from icons-simple: 17,726,467 / 80,434 = 220.4
+
+    if fonts_only:
+        # -----------------------------------------------------------------------
+        # Fonts-only mode: re-download just fonts-simple with updated fraction,
+        # read existing manifest to preserve icons/emoji entries.
+        # -----------------------------------------------------------------------
+        manifest_path = raw_dir / "download_manifest.json"
+        if manifest_path.exists():
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+            all_files = manifest["downloaded_files"]
+            estimated_tokens = manifest.get("estimated_tokens_rough", 0)
+            # Remove stale fonts entry so we recount cleanly
+            all_files = [f for f in all_files if "fonts" not in f]
+            estimated_tokens -= manifest.get("fonts_tokens", 0)
+        else:
+            print("WARNING: No existing manifest found. Run without --fonts-only first.")
+            all_files = []
+            estimated_tokens = 0
+
+        frac = datasets_cfg.get("fonts_subsample_fraction", 0.40)
+        fonts_name = [d for d in datasets_cfg.get("supplementary", []) if "fonts" in d][0]
+        print(f"\nRe-downloading {fonts_name} at subsample_fraction={frac} ...")
+        fonts_svgs = load_and_collect(fonts_name, subsample_fraction=frac)
+        if fonts_svgs:
+            save_raw_svgs(fonts_svgs, raw_dir / "fonts_simple.jsonl", source_name="fonts-simple")
+            if "fonts_simple.jsonl" not in all_files:
+                all_files.append("fonts_simple.jsonl")
+            fonts_tokens = len(fonts_svgs) * TOKENS_PER_SVG
+            estimated_tokens += fonts_tokens
+            print(f"Fonts tokens estimate: {fonts_tokens:,}  Total estimate: {estimated_tokens:,}")
+
+        manifest = {
+            "downloaded_files": all_files,
+            "fonts_tokens": fonts_tokens if fonts_svgs else 0,
+            "estimated_tokens_rough": estimated_tokens,
+            "target_tokens": target_tokens,
+            "note": "Actual token count computed after cleaning + tokenization in scripts 02-04",
+        }
+        manifest_path = raw_dir / "download_manifest.json"
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+        print(f"Manifest updated: {manifest_path}")
+        print(f"Files in manifest: {all_files}")
+        return
+
     # -----------------------------------------------------------------------
     # 1. Primary dataset: svg-icons-simple
     # -----------------------------------------------------------------------
@@ -135,10 +182,6 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     icons_svgs = load_and_collect(primary_name)
     save_raw_svgs(icons_svgs, raw_dir / "icons_simple.jsonl", source_name="icons-simple")
 
-    # Measured token rate from icons-simple run: ~220 tokens/SVG after BPE-4096
-    # (17,726,467 tokens / 80,434 SVGs = 220.4). Use SVG count as the estimator
-    # rather than character count, which was wildly off (old: 0.4 chars/token).
-    TOKENS_PER_SVG = 220
     estimated_tokens = len(icons_svgs) * TOKENS_PER_SVG
     print(f"\nEstimated tokens from icons-simple: {estimated_tokens:,} (~{TOKENS_PER_SVG} tok/SVG)")
 
@@ -162,14 +205,16 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     # -----------------------------------------------------------------------
     # 3. Supplementary: svg-fonts-simple (subsampled, if still needed)
     # -----------------------------------------------------------------------
+    fonts_tokens = 0
     if estimated_tokens < target_tokens and remaining_datasets:
         fonts_name = remaining_datasets.pop(0)
-        frac = datasets_cfg.get("fonts_subsample_fraction", 0.05)
+        frac = datasets_cfg.get("fonts_subsample_fraction", 0.40)
         fonts_svgs = load_and_collect(fonts_name, subsample_fraction=frac)
         if fonts_svgs:
             save_raw_svgs(fonts_svgs, raw_dir / "fonts_simple.jsonl", source_name="fonts-simple")
             all_files.append("fonts_simple.jsonl")
-            estimated_tokens += len(fonts_svgs) * TOKENS_PER_SVG
+            fonts_tokens = len(fonts_svgs) * TOKENS_PER_SVG
+            estimated_tokens += fonts_tokens
             print(f"Updated estimated tokens (after fonts): {estimated_tokens:,}")
 
     # -----------------------------------------------------------------------
@@ -177,7 +222,7 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     # -----------------------------------------------------------------------
     manifest = {
         "downloaded_files": all_files,
-        "total_raw_svgs": len(icons_svgs),
+        "fonts_tokens": fonts_tokens,
         "estimated_tokens_rough": estimated_tokens,
         "target_tokens": target_tokens,
         "note": "Actual token count computed after cleaning + tokenization in scripts 02-04",
@@ -200,5 +245,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Download SVG datasets from HuggingFace")
     parser.add_argument("--config", default="configs/data_config.yaml",
                         help="Path to data_config.yaml (relative to repo root)")
+    parser.add_argument("--fonts-only", action="store_true",
+                        help="Re-download only fonts-simple (preserves icons/emoji on disk)")
     args = parser.parse_args()
-    main(args.config)
+    main(args.config, fonts_only=args.fonts_only)

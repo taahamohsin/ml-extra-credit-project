@@ -17,7 +17,7 @@ datasets:
   # Measured token rate from icons-simple: ~220 tokens/SVG (after BPE-4096).
   # Need ~374k more SVGs to reach 100M. fonts-simple has ~1M+ SVGs so 0.40
   # subsample (~400k SVGs) should get us there; stack is a fallback.
-  fonts_subsample_fraction: 0.40
+  fonts_subsample_fraction: 0.55
   stack_subsample_fraction: 0.10
 
 # --- SVG Cleaning ---
