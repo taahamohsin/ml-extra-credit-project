@@ -128,7 +128,8 @@ def main(config_path: str = "configs/data_config.yaml", fonts_only: bool = False
     datasets_cfg = cfg["datasets"]
     target_tokens = datasets_cfg["target_train_tokens"]
 
-    TOKENS_PER_SVG = 220  # measured from icons-simple: 17,726,467 / 80,434 = 220.4
+    TOKENS_PER_SVG = 99   # measured from mixed corpus (icons+emoji+fonts): 88.3M / 761k = ~116,
+                          # but fonts dominate supplements and average ~99 tok/SVG
 
     if fonts_only:
         # -----------------------------------------------------------------------
