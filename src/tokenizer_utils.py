@@ -111,9 +111,12 @@ def train_tokenizer(
     try:
         print("Training tokenizer from file ...")
         tokenizer.train([tmp_path], trainer=trainer)
-    finally:
+    except Exception as e:
         os.unlink(tmp_path)
-        print("Temp file deleted.")
+        raise RuntimeError(f"Tokenizer training failed: {e}") from e
+
+    os.unlink(tmp_path)
+    print("Temp file deleted.")
 
     # Add post-processing so encode() automatically wraps with BOS/EOS
     tokenizer.post_processor = TemplateProcessing(
@@ -127,8 +130,23 @@ def train_tokenizer(
     if save_dir is not None:
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
-        tokenizer.save(str(save_dir / "tokenizer.json"))
-        print(f"Tokenizer saved to {save_dir / 'tokenizer.json'}")
+        save_path = save_dir / "tokenizer.json"
+        # Write to a temp file first, then rename — avoids partial writes to
+        # Google Drive (which can leave an empty file on crash or flush race).
+        tmp_save = save_path.with_suffix(".tmp")
+        try:
+            tokenizer.save(str(tmp_save))
+            tmp_save.replace(save_path)
+            print(f"Tokenizer saved to {save_path}")
+            # Verify the file is non-empty and valid JSON before continuing
+            import json as _json
+            with open(save_path) as _f:
+                _json.load(_f)
+            print(f"  Verified: {save_path.stat().st_size / 1e3:.1f} KB, valid JSON")
+        except Exception as e:
+            if tmp_save.exists():
+                tmp_save.unlink()
+            raise RuntimeError(f"Failed to save tokenizer to {save_path}: {e}") from e
 
     return tokenizer
 
