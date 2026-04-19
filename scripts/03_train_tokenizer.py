@@ -42,7 +42,7 @@ from src.tokenizer_utils import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def load_cleaned_svgs(cleaned_path: Path, max_samples: int | None = None) -> list[str]:
+def load_cleaned_svgs(cleaned_path: Path, max_samples: int | None = None, sample_size: int | None = None, seed: int = 42) -> list[str]:
     """Load SVG strings from the cleaned.jsonl file."""
     svgs = []
     with open(cleaned_path, encoding="utf-8") as f:
@@ -60,6 +60,13 @@ def load_cleaned_svgs(cleaned_path: Path, max_samples: int | None = None) -> lis
             if max_samples and len(svgs) >= max_samples:
                 break
     print(f"Loaded {len(svgs):,} cleaned SVGs")
+
+    if sample_size is not None and sample_size < len(svgs):
+        import random
+        rng = random.Random(seed)
+        svgs = rng.sample(svgs, sample_size)
+        print(f"Sampled {len(svgs):,} SVGs for tokenizer training (seed={seed})")
+
     return svgs
 
 
@@ -181,9 +188,10 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
         sys.exit(1)
 
     # -----------------------------------------------------------------------
-    # 1. Load cleaned SVGs
+    # 1. Load cleaned SVGs (subsample for tokenizer training to save RAM)
     # -----------------------------------------------------------------------
-    svgs = load_cleaned_svgs(cleaned_path)
+    sample_size = tok_cfg.get("sample_size", None)
+    svgs = load_cleaned_svgs(cleaned_path, sample_size=sample_size, seed=cfg.get("seed", 42))
 
     # -----------------------------------------------------------------------
     # 2. Train tokenizer — save to local /tmp first

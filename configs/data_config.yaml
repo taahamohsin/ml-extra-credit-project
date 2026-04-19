@@ -34,6 +34,7 @@ cleaning:
 # --- Tokenizer ---
 tokenizer:
   vocab_size: 4096
+  sample_size: 150000            # train tokenizer on a random sample (saves RAM/time)
   type: "BPE"
   pre_tokenizer: "ByteLevel"    # handles all Unicode via raw bytes
   special_tokens:
