@@ -57,6 +57,9 @@ def main():
     parser.add_argument("--lr",          type=float, default=None,
                         help="Peak learning rate (overrides training_config.yaml)")
     parser.add_argument("--batch_size",  type=int,   default=None)
+    parser.add_argument("--grad_accum",  type=int,   default=None,
+                        help="Gradient accumulation steps. Per-step batch size is "
+                             "halved accordingly; effective batch size is unchanged.")
     parser.add_argument("--resume",      action="store_true",
                         help="Resume from last local checkpoint")
     parser.add_argument("--model_config",    default="configs/model_configs.yaml")
@@ -104,10 +107,13 @@ def main():
     # -----------------------------------------------------------------------
     # Datasets
     # -----------------------------------------------------------------------
-    n_train_tokens = count_train_tokens(binary_dir)
-    batch_size     = args.batch_size or tcfg["batch_size"]
-    seq_len        = mcfg.get("max_seq_len", 1024)
-    tokens_per_step = batch_size * seq_len
+    n_train_tokens  = count_train_tokens(binary_dir)
+    effective_batch = args.batch_size or tcfg["batch_size"]  # total seqs/step
+    grad_accum      = args.grad_accum or tcfg.get("grad_accum_steps", 1)
+    # Per-GPU batch size = effective batch / grad_accum (keeps memory flat)
+    batch_size      = max(1, effective_batch // grad_accum)
+    seq_len         = mcfg.get("max_seq_len", 1024)
+    tokens_per_step = effective_batch * seq_len              # same for all accum values
     total_steps     = max(1, n_train_tokens // tokens_per_step)
 
     print(f"Train tokens: {n_train_tokens:,}  |  steps/epoch: {total_steps:,}")
@@ -154,7 +160,6 @@ def main():
     # -----------------------------------------------------------------------
     # Training config dict
     # -----------------------------------------------------------------------
-    grad_accum = tcfg.get("grad_accum_steps", 1)
     train_cfg = {
         "model_name":          model_name,
         "learning_rate":       peak_lr,
@@ -179,8 +184,8 @@ def main():
     print("=" * 60)
     print(f"  Non-emb params:  {n_params:,}")
     print(f"  Peak LR:         {peak_lr:.2e}")
-    print(f"  Batch size:      {batch_size} seqs × {seq_len} tokens = {tokens_per_step:,} tok/step")
-    print(f"  Grad accum:      {grad_accum}  (effective batch: {batch_size*grad_accum} seqs)")
+    print(f"  Batch size:      {batch_size} seqs/step × {grad_accum} accum = {effective_batch} seqs effective")
+    print(f"  Tokens/step:     {tokens_per_step:,}  (seq_len={seq_len})")
     print(f"  Total steps:     {total_steps:,}")
     print(f"  bf16:            {train_cfg['use_bf16']}")
     print(f"  Local ckpts:     {local_ckpt_dir}/{model_name}/")
