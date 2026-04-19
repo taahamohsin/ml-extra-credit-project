@@ -167,9 +167,14 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     cleaning_cfg = cfg["cleaning"]
 
     cleaned_path = REPO_ROOT / paths_cfg["cleaned_data_dir"] / "cleaned.jsonl"
-    tokenizer_dir = REPO_ROOT / paths_cfg["tokenizer_dir"]
+    tokenizer_dir = REPO_ROOT / paths_cfg["tokenizer_dir"]   # may be a Drive symlink
     plots_dir = REPO_ROOT / paths_cfg["plots_dir"]
     stats_file = REPO_ROOT / paths_cfg["stats_file"]
+
+    # Train and save to local disk first, then copy to Drive at the end.
+    # This avoids Drive write-quota errors during the tokenizer save step.
+    local_tokenizer_dir = Path("/tmp/tokenizer_local")
+    local_tokenizer_dir.mkdir(parents=True, exist_ok=True)
 
     if not cleaned_path.exists():
         print(f"ERROR: {cleaned_path} not found. Run 02_clean_normalize.py first.")
@@ -181,13 +186,14 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     svgs = load_cleaned_svgs(cleaned_path)
 
     # -----------------------------------------------------------------------
-    # 2. Train tokenizer
+    # 2. Train tokenizer — save to local /tmp first
     # -----------------------------------------------------------------------
     print(f"\nTraining BPE tokenizer (vocab_size={tok_cfg['vocab_size']}) ...")
+    print(f"  Saving locally to {local_tokenizer_dir} (Drive copy happens after stats)")
     tokenizer = train_tokenizer(
         svg_texts=svgs,
         vocab_size=tok_cfg["vocab_size"],
-        save_dir=tokenizer_dir,
+        save_dir=local_tokenizer_dir,
     )
 
     actual_vocab_size = tokenizer.get_vocab_size()
@@ -239,7 +245,7 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
         print(f"  {tok_str:<25} {tid:>6} {cnt:>12,}")
 
     # -----------------------------------------------------------------------
-    # 6. Save tokenizer stats
+    # 6. Save tokenizer stats — local first
     # -----------------------------------------------------------------------
     tokenizer_stats = {
         "vocab_size": actual_vocab_size,
@@ -250,11 +256,10 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
             for tid, cnt in top_tokens
         ],
     }
-    tok_stats_path = tokenizer_dir / "tokenizer_stats.json"
-    tokenizer_dir.mkdir(parents=True, exist_ok=True)
+    tok_stats_path = local_tokenizer_dir / "tokenizer_stats.json"
     with open(tok_stats_path, "w") as f:
         json.dump(tokenizer_stats, f, indent=2)
-    print(f"\nTokenizer stats saved to {tok_stats_path}")
+    print(f"\nTokenizer stats saved locally to {tok_stats_path}")
 
     # Merge into main stats file if it exists
     if stats_file.exists():
@@ -265,20 +270,41 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
             json.dump(main_stats, f, indent=2)
 
     # -----------------------------------------------------------------------
-    # 7. Generate plots
+    # 7. Generate plots — local disk
     # -----------------------------------------------------------------------
+    local_plots_dir = Path("/tmp/plots_local")
+    local_plots_dir.mkdir(parents=True, exist_ok=True)
     print("\nGenerating plots ...")
     plot_token_frequencies(
         freq_dict, tokenizer,
-        save_path=REPO_ROOT / plots_dir / "token_freq_distribution.png",
+        save_path=local_plots_dir / "token_freq_distribution.png",
     )
     plot_sequence_length_histogram(
         length_stats, lengths,
-        save_path=REPO_ROOT / plots_dir / "sequence_length_histogram.png",
+        save_path=local_plots_dir / "sequence_length_histogram.png",
     )
 
     # -----------------------------------------------------------------------
-    # 8. Summary
+    # 8. Copy all outputs from local disk to Drive
+    # -----------------------------------------------------------------------
+    import shutil
+    print("\nCopying outputs to Drive ...")
+
+    tokenizer_dir.mkdir(parents=True, exist_ok=True)
+    for src in local_tokenizer_dir.iterdir():
+        dst = tokenizer_dir / src.name
+        shutil.copy2(src, dst)
+        print(f"  {src.name}  ({src.stat().st_size / 1e3:.1f} KB) → {dst}")
+
+    drive_plots = REPO_ROOT / plots_dir
+    drive_plots.mkdir(parents=True, exist_ok=True)
+    for src in local_plots_dir.iterdir():
+        dst = drive_plots / src.name
+        shutil.copy2(src, dst)
+        print(f"  {src.name}  ({src.stat().st_size / 1e3:.1f} KB) → {dst}")
+
+    # -----------------------------------------------------------------------
+    # 9. Summary
     # -----------------------------------------------------------------------
     print("\n" + "=" * 60)
     print("Phase 1 Step 3 COMPLETE — tokenizer trained.")

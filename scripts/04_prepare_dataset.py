@@ -159,8 +159,13 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
 
     cleaned_path = REPO_ROOT / paths_cfg["cleaned_data_dir"] / "cleaned.jsonl"
     tokenizer_dir = REPO_ROOT / paths_cfg["tokenizer_dir"]
-    binary_dir = REPO_ROOT / paths_cfg["binary_dir"]
+    binary_dir = REPO_ROOT / paths_cfg["binary_dir"]       # Drive (final destination)
     stats_file = REPO_ROOT / paths_cfg["stats_file"]
+
+    # Write binaries to local /content/ disk first — Drive write quota is
+    # easily exceeded by 200MB+ memmap files. Copy to Drive only after verify.
+    local_binary_dir = Path("/tmp/binary_local")
+    local_binary_dir.mkdir(parents=True, exist_ok=True)
 
     if not cleaned_path.exists():
         print(f"ERROR: {cleaned_path} not found. Run 02_clean_normalize.py first.")
@@ -206,34 +211,33 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     print(f"  Test SVGs:  {len(test):,}")
 
     # -----------------------------------------------------------------------
-    # 4. Write binary files
+    # 4. Write binary files to LOCAL disk
     # -----------------------------------------------------------------------
-    binary_dir.mkdir(parents=True, exist_ok=True)
-    print("\nWriting binary files ...")
+    print(f"\nWriting binary files to local disk ({local_binary_dir}) ...")
 
-    train_path = binary_dir / "train.bin"
-    val_path = binary_dir / "val.bin"
-    test_path = binary_dir / "test.bin"
+    train_path = local_binary_dir / "train.bin"
+    val_path   = local_binary_dir / "val.bin"
+    test_path  = local_binary_dir / "test.bin"
 
     n_train_tokens = write_binary(train, train_path)
-    n_val_tokens = write_binary(val, val_path)
-    n_test_tokens = write_binary(test, test_path)
+    n_val_tokens   = write_binary(val,   val_path)
+    n_test_tokens  = write_binary(test,  test_path)
 
     print(f"  train.bin: {n_train_tokens:,} tokens  ({train_path.stat().st_size / 1e6:.1f} MB)")
     print(f"  val.bin:   {n_val_tokens:,} tokens  ({val_path.stat().st_size / 1e6:.1f} MB)")
     print(f"  test.bin:  {n_test_tokens:,} tokens  ({test_path.stat().st_size / 1e6:.1f} MB)")
 
     # -----------------------------------------------------------------------
-    # 5. Verify
+    # 5. Verify on local disk (fast — no Drive I/O)
     # -----------------------------------------------------------------------
     print("\nVerifying binary files ...")
     assert verify_binary(train_path, n_train_tokens), "train.bin verification failed!"
-    assert verify_binary(val_path, n_val_tokens), "val.bin verification failed!"
-    assert verify_binary(test_path, n_test_tokens), "test.bin verification failed!"
+    assert verify_binary(val_path,   n_val_tokens),   "val.bin verification failed!"
+    assert verify_binary(test_path,  n_test_tokens),  "test.bin verification failed!"
     print("  All files verified OK.")
 
     # -----------------------------------------------------------------------
-    # 6. Save split info and update stats
+    # 6. Save split info locally, then copy everything to Drive
     # -----------------------------------------------------------------------
     split_info = {
         "train_svgs": len(train),
@@ -252,21 +256,29 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
         "seed": splitting_cfg["seed"],
     }
 
-    split_info_path = binary_dir / "split_info.json"
-    with open(split_info_path, "w") as f:
+    local_split_info = local_binary_dir / "split_info.json"
+    with open(local_split_info, "w") as f:
         json.dump(split_info, f, indent=2)
-    print(f"\nSplit info saved to {split_info_path}")
 
-    # Update main stats file
+    # Update main stats file (this is on Drive but it's tiny — fine)
     if stats_file.exists():
         with open(stats_file) as f:
             main_stats = json.load(f)
     else:
         main_stats = {}
-
     main_stats["splits"] = split_info
     with open(stats_file, "w") as f:
         json.dump(main_stats, f, indent=2)
+
+    # Copy binaries + split_info from local disk to Drive
+    import shutil
+    binary_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\nCopying binary files to Drive ({binary_dir}) ...")
+    for src in local_binary_dir.iterdir():
+        dst = binary_dir / src.name
+        shutil.copy2(src, dst)
+        print(f"  {src.name}  ({src.stat().st_size / 1e6:.1f} MB) → {dst}")
+    print(f"\nSplit info saved to {binary_dir / 'split_info.json'}")
 
     # -----------------------------------------------------------------------
     # 7. Token count check (critical milestone)
