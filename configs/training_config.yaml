@@ -1,0 +1,50 @@
+# ============================================================
+# Training Configuration — SVG Scaling Laws
+# ============================================================
+
+# --- Optimizer ---
+optimizer:
+  type:         AdamW
+  beta1:        0.9
+  beta2:        0.95
+  weight_decay: 0.1       # applied to weight matrices only (not biases / LN)
+  grad_clip:    1.0
+
+# --- Learning rate schedule ---
+lr_schedule:
+  type:           cosine_warmup
+  warmup_steps:   200
+  min_lr_ratio:   0.1     # min_lr = peak_lr * min_lr_ratio
+
+# --- Batch / sequence ---
+batch_size:       64      # sequences per step (before grad accumulation)
+seq_len:          1024    # tokens per sequence
+# effective tokens/step = batch_size * seq_len = 65,536
+# Use grad_accum_steps if GPU memory is insufficient for batch_size=64
+grad_accum_steps: 1
+
+# --- Mixed precision ---
+use_bf16: true            # bf16 on A100; falls back to fp32 if not CUDA
+
+# --- Training duration (1 epoch for scaling comparison) ---
+# total_steps is computed at runtime from: train_tokens / (batch_size * seq_len)
+# These defaults are approximate for 100M token dataset with batch_size=64, seq_len=1024
+# actual value is always recalculated in the training script.
+total_steps_approx: 1526   # 100M / 65536 ≈ 1526 steps
+
+# --- Evaluation & checkpointing ---
+eval_interval:        200   # run validation every N steps
+checkpoint_interval:  500   # save checkpoint every N steps
+
+# --- Validation ---
+val_batches: 50             # number of val batches per evaluation
+
+# --- LR sweep (script 06) ---
+lr_sweep:
+  lr_values: [3.0e-5, 1.0e-4, 3.0e-4, 1.0e-3, 3.0e-3, 1.0e-2, 3.0e-2]
+  model:     tiny
+  max_steps: 2000           # fixed step budget per LR (faster than full epoch × 7)
+
+# --- Default learning rate (filled in after sweep) ---
+# Set this to the best LR found in script 06 before running script 05.
+learning_rate: 1.0e-3
