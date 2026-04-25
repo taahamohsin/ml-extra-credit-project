@@ -30,9 +30,6 @@ from src.training_utils import evaluate, get_lr
 
 from torch.utils.data import DataLoader
 
-BASE_SHAPES_PATH = str(REPO_ROOT / "outputs" / "base_shapes.bsh")
-
-
 def run_one_lr(
     lr: float,
     max_steps: int,
@@ -43,7 +40,7 @@ def run_one_lr(
     use_bf16: bool,
     warmup_steps: int,
 ) -> dict:
-    model = build_mup_model("tiny", BASE_SHAPES_PATH).to(device)
+    model = build_mup_model("tiny").to(device)
     if hasattr(torch, "compile"):
         model = torch.compile(model)
 
@@ -154,11 +151,6 @@ def main():
     parser.add_argument("--training_config", default="configs/training_config.yaml")
     parser.add_argument("--data_config",     default="configs/data_config.yaml")
     args = parser.parse_args()
-
-    if not Path(BASE_SHAPES_PATH).exists():
-        print(f"ERROR: {BASE_SHAPES_PATH} not found.")
-        print("Run first:  python scripts/07_train_mup.py --make_base_shapes")
-        sys.exit(1)
 
     with open(REPO_ROOT / args.training_config) as f:
         tcfg = yaml.safe_load(f)

@@ -236,7 +236,19 @@ Every non-obvious design choice is documented here with reasoning. This log serv
 2. Use the `mup` Python package (Microsoft Research)
 **Choice:** `mup` package
 **Reasoning:** I chose the `mup` package because manual µP implementation is error-prone — the per-layer LR multiplier logic is non-trivial and easy to get wrong silently, with no obvious signal that the parameterization is incorrect. The `mup` package is the reference implementation from the original authors and correctly handles `MuAdamW`, `set_base_shapes`, and `MuSharedReadout` (needed for weight-tied output heads). I pinned the version in `requirements.txt` to guard against breaking changes.
-**Impact:** In `src/model_mup.py` I made two µP-specific changes to the standard transformer: (1) attention scaling changed from `1/√d_head` to `1/d_head`, and (2) the output head replaced with `MuSharedReadout`. I generate base shapes from Tiny (d=128) and a delta model (d=256), save them to `outputs/base_shapes.bsh`, and reuse that file across all 5 model sizes.
+**Impact:** In `src/model_mup.py` I made two µP-specific changes to the standard transformer: (1) attention scaling changed from `1/√d_head` to `1/d_head`, and (2) the output head replaced with `MuSharedReadout`. Base shapes are built in-memory inside `build_mup_model()` using a base and delta that share the target model's exact depth and head count, with `d_model` and `d_ff` halved. No `.bsh` file is written or required.
+
+---
+
+### Decision: µP base shapes built in-memory per model (not saved to .bsh)
+**Date:** 2026-04-25
+**Issue encountered:** The initial implementation saved a single `base_shapes.bsh` from Tiny (d=128, 4 layers) and attempted to reuse it for all 5 model sizes. This produced two errors in sequence: first, `assert_hidden_size_inf` failed because the base and delta had the same `d_ff`, so `mup` couldn't identify the FFN hidden dimension as infinite; second, after fixing `d_ff`, `_zip_infshape_dict` failed with a name mismatch because the base shapes encoded a 4-layer architecture while Small, Medium, Large, and XL have 6–12 layers — `mup` requires exact parameter name equality between the base and the target.
+**Options considered:**
+1. Generate a separate `.bsh` file per model size (5 files, one pre-training step per model)
+2. Build base shapes in-memory inside `build_mup_model()` using a base and delta that match the target's depth exactly
+**Choice:** Option 2 — in-memory per-model base shapes
+**Reasoning:** I chose in-memory construction because it eliminates the pre-generation step entirely and removes the `.bsh` file as a failure point. The base and delta are constructed with the same `n_layers` and `n_heads` as the target model, with `d_model` and `d_ff` halved — this gives `mup` exactly what it needs to identify the width dimensions as infinite while keeping all parameter names aligned.
+**Impact:** I removed `make_mup_base_shapes()`, the `--make_base_shapes` CLI flag, `BASE_SHAPES_PATH`, and the `.bsh` existence check from both training scripts. `build_mup_model()` now takes only a model name and constructs base shapes internally. Notebook 03 Cell 5 was updated to a sanity-check that instantiates all 5 µP models.
 
 ---
 

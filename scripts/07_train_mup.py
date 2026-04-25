@@ -2,16 +2,12 @@
 07_train_mup.py
 ---------------
 Train a single µP transformer for exactly 1 epoch on the SVG dataset.
-Mirrors 05_train_model.py but uses MupTransformerLM + MuAdamW and requires
-base shapes to have been generated first (outputs/base_shapes.bsh).
+Mirrors 05_train_model.py but uses MupTransformerLM + MuAdamW.
+Base shapes are built in-memory per model — no .bsh file needed.
 
 Local-first I/O: all heavy writes go to /tmp/, copied to Drive at checkpoints.
 
 Usage:
-    # Generate base shapes once (fast, CPU-only):
-    python scripts/07_train_mup.py --make_base_shapes
-
-    # Train a model:
     python scripts/07_train_mup.py --model_name xl --lr 1e-3 --grad_accum 2 --resume
 """
 
@@ -29,14 +25,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.model import MODEL_CONFIGS
-from src.model_mup import build_mup_model, build_mup_optimizer, make_mup_base_shapes
+from src.model_mup import build_mup_model, build_mup_optimizer
 from src.dataset import make_datasets
 from src.training_utils import train
 
 from torch.utils.data import DataLoader
-
-
-BASE_SHAPES_PATH = str(REPO_ROOT / "outputs" / "base_shapes.bsh")
 
 
 def count_train_tokens(binary_dir: Path) -> int:
@@ -62,25 +55,10 @@ def main():
                         help="Gradient accumulation steps. Per-step batch size "
                              "is divided accordingly; effective batch unchanged.")
     parser.add_argument("--resume",      action="store_true")
-    parser.add_argument("--make_base_shapes", action="store_true",
-                        help="Generate base_shapes.bsh and exit (run once before training).")
     parser.add_argument("--model_config",    default="configs/model_configs.yaml")
     parser.add_argument("--training_config", default="configs/training_config.yaml")
     parser.add_argument("--data_config",     default="configs/data_config.yaml")
     args = parser.parse_args()
-
-    # -----------------------------------------------------------------------
-    # Make base shapes (one-time setup)
-    # -----------------------------------------------------------------------
-    if args.make_base_shapes:
-        Path(BASE_SHAPES_PATH).parent.mkdir(parents=True, exist_ok=True)
-        make_mup_base_shapes(BASE_SHAPES_PATH)
-        return
-
-    if not Path(BASE_SHAPES_PATH).exists():
-        print(f"ERROR: {BASE_SHAPES_PATH} not found.")
-        print("Run first:  python scripts/07_train_mup.py --make_base_shapes")
-        sys.exit(1)
 
     # -----------------------------------------------------------------------
     # Load configs
@@ -104,7 +82,7 @@ def main():
     # Build µP model
     # -----------------------------------------------------------------------
     model_name = args.model_name
-    model = build_mup_model(model_name, BASE_SHAPES_PATH)
+    model = build_mup_model(model_name)
     model = model.to(device)
 
     if hasattr(torch, "compile"):
@@ -189,7 +167,7 @@ def main():
     print(f"  Peak LR:         {peak_lr:.2e}")
     print(f"  Batch size:      {batch_size} seqs/step × {grad_accum} accum = {effective_batch} seqs effective")
     print(f"  Total steps:     {total_steps:,}")
-    print(f"  Base shapes:     {BASE_SHAPES_PATH}")
+    print(f"  Base shapes:     in-memory (per-model)")
     print("=" * 60)
 
     t_start = time.time()

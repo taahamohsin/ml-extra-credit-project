@@ -8,16 +8,9 @@ Key differences from model.py (standard parameterization):
   2. Output head replaced with MuSharedReadout (weight-tied, µP-aware)
   3. set_base_shapes() applied before optimizer creation so MuAdamW
      applies per-layer LR multipliers correctly
-  4. _init_weights unchanged — mup.set_base_shapes handles init scaling
 
-Usage pattern:
-    base   = MupTransformerLM(ModelConfig(d_model=128, ...))
-    delta  = MupTransformerLM(ModelConfig(d_model=256, ...))  # any wider width
-    make_base_shapes(base, delta, savefile="outputs/base_shapes.bsh")
-
-    model  = MupTransformerLM(ModelConfig(d_model=768, ...))
-    set_base_shapes(model, "outputs/base_shapes.bsh")
-    opt    = MuAdamW(model.parameters(), lr=best_lr)
+Base shapes are built in-memory inside build_mup_model() using a base and delta
+model with the same depth/heads as the target but half the width. No .bsh file needed.
 """
 
 from __future__ import annotations
@@ -204,30 +197,22 @@ class MupTransformerLM(nn.Module):
 # Base shapes helper
 # ---------------------------------------------------------------------------
 
-def make_mup_base_shapes(save_path: str) -> None:
+def build_mup_model(name: str, **overrides) -> MupTransformerLM:
     """
-    Generate and save base shapes from Tiny (d_model=128) and a delta model
-    (d_model=256). Call once before any training. The .bsh file is reused
-    for all model sizes.
+    Build a µP model and apply base shapes in-memory.
+    Base and delta share the same n_layers/n_heads as the target; only d_model
+    and d_ff vary (2×) so mup correctly identifies the width as the infinite dimension.
     """
+    import dataclasses
     from mup import make_base_shapes
 
-    base  = MupTransformerLM(MODEL_CONFIGS["tiny"])             # d_model=128, d_ff=512
-    delta = MupTransformerLM(ModelConfig(                       # d_model=256, d_ff=1024 (2×)
-        d_model=256, n_layers=4, n_heads=4, d_ff=1024,
-        vocab_size=MODEL_CONFIGS["tiny"].vocab_size,
-        max_seq_len=MODEL_CONFIGS["tiny"].max_seq_len,
-    ))
-    make_base_shapes(base, delta, savefile=save_path)
-    print(f"Base shapes saved to {save_path}")
-
-
-def build_mup_model(name: str, base_shapes_path: str, **overrides) -> MupTransformerLM:
-    """Build a µP model, apply base shapes, ready for MuAdamW."""
-    import dataclasses
     cfg   = dataclasses.replace(MODEL_CONFIGS[name], **overrides)
     model = MupTransformerLM(cfg)
-    set_base_shapes(model, base_shapes_path)
+
+    base  = MupTransformerLM(dataclasses.replace(cfg, d_model=cfg.d_model,     d_ff=cfg.d_ff))
+    delta = MupTransformerLM(dataclasses.replace(cfg, d_model=cfg.d_model * 2, d_ff=cfg.d_ff * 2))
+    make_base_shapes(base, delta, savefile=None)
+    set_base_shapes(model, base)
     return model
 
 
