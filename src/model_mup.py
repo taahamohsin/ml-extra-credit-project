@@ -212,9 +212,9 @@ def make_mup_base_shapes(save_path: str) -> None:
     """
     from mup import make_base_shapes
 
-    base  = MupTransformerLM(MODEL_CONFIGS["tiny"])             # d_model=128
-    delta = MupTransformerLM(ModelConfig(                       # d_model=256, same depth
-        d_model=256, n_layers=4, n_heads=4, d_ff=512,
+    base  = MupTransformerLM(MODEL_CONFIGS["tiny"])             # d_model=128, d_ff=512
+    delta = MupTransformerLM(ModelConfig(                       # d_model=256, d_ff=1024 (2×)
+        d_model=256, n_layers=4, n_heads=4, d_ff=1024,
         vocab_size=MODEL_CONFIGS["tiny"].vocab_size,
         max_seq_len=MODEL_CONFIGS["tiny"].max_seq_len,
     ))
