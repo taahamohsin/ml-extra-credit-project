@@ -35,7 +35,7 @@ from tqdm import tqdm
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.svg_utils import clean_svg, md5_hash, is_valid_xml
+from src.svg_utils import clean_svg, md5_hash, is_valid_xml, is_renderable
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +149,70 @@ def debug_sample(raw_file: Path, min_length_chars: int, sample_size: int = 500) 
 
 
 # ---------------------------------------------------------------------------
+# Render validation
+# ---------------------------------------------------------------------------
+
+def render_validation_sample(
+    cleaned_path: Path,
+    sample_size: int = 1000,
+    seed: int = 42,
+) -> dict:
+    """
+    Load a random sample of cleaned SVGs and test whether cairosvg can render
+    each one. Does NOT re-run the cleaning pipeline.
+
+    Returns a dict with render success stats, suitable for merging into
+    dataset_stats.json.
+    """
+    import random
+
+    # Load all cleaned SVGs into a list (just the strings — no heavy data)
+    svgs = []
+    with open(cleaned_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                svgs.append(json.loads(line)["svg"])
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+    n_total = len(svgs)
+    if n_total == 0:
+        print("WARNING: No cleaned SVGs found for render validation.")
+        return {}
+
+    rng = random.Random(seed)
+    sample = rng.sample(svgs, min(sample_size, n_total))
+
+    print(f"\nRender validation: testing {len(sample):,} randomly sampled SVGs ...")
+
+    n_ok = 0
+    n_fail = 0
+    for svg in tqdm(sample, desc="  Rendering"):
+        if is_renderable(svg):
+            n_ok += 1
+        else:
+            n_fail += 1
+
+    rate = n_ok / len(sample)
+    print(f"  Renderable:     {n_ok:,} / {len(sample):,}  ({100*rate:.1f}%)")
+    print(f"  Failed to render: {n_fail:,}")
+
+    return {
+        "render_validation": {
+            "sample_size":      len(sample),
+            "total_cleaned":    n_total,
+            "n_renderable":     n_ok,
+            "n_failed":         n_fail,
+            "render_rate":      round(rate, 4),
+            "seed":             seed,
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -259,6 +323,10 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     print(f"  - Too short (<{cleaning_cfg['min_length_chars']} chars): {removed.get('too_short', 0):>10,}")
     print(f"  - Duplicates:         {removed.get('duplicate', 0):>10,}")
     print(f"\nCleaned output: {cleaned_path}")
+
+    # Render validation on a random sample of the cleaned output
+    render_stats = render_validation_sample(cleaned_path, sample_size=1000)
+    aggregate_stats.update(render_stats)
 
     # Save stats JSON
     with open(stats_file, "w") as f:
