@@ -240,15 +240,17 @@ Every non-obvious design choice is documented here with reasoning. This log serv
 
 ---
 
-### Decision: µP base shapes built in-memory per model (not saved to .bsh)
+### Decision: µP base shapes — in-memory, with Tiny widths as the proxy base
 **Date:** 2026-04-25
-**Issue encountered:** The initial implementation saved a single `base_shapes.bsh` from Tiny (d=128, 4 layers) and attempted to reuse it for all 5 model sizes. This produced two errors in sequence: first, `assert_hidden_size_inf` failed because the base and delta had the same `d_ff`, so `mup` couldn't identify the FFN hidden dimension as infinite; second, after fixing `d_ff`, `_zip_infshape_dict` failed with a name mismatch because the base shapes encoded a 4-layer architecture while Small, Medium, Large, and XL have 6–12 layers — `mup` requires exact parameter name equality between the base and the target.
+**Issue encountered:** Three iterations were needed to get this right. (1) The initial design saved a single `base_shapes.bsh` from Tiny and reused it across all sizes — failed because `n_layers` differs across models and `mup`'s `_zip_infshape_dict` requires exact parameter name equality. (2) The second attempt built base/delta in-memory per model, with the base equal to the target itself and the delta at 2× width — this passed the shape checks but produced no actual µP scaling, because the ratio between target and base was always 1:1. The symptom was that the LR found on Tiny "transferred" to Small (which is close enough in width to coincidentally work), but Medium (3× Tiny's width) failed catastrophically — train loss got stuck at ~6.0 for the first 1000 steps because the effective LR was 30× too high. (3) The current implementation correctly uses Tiny's widths (d_model=128, d_ff=512) as the **proxy base** for every target, with the delta at 2× those widths.
+**Why this matters:** µP's mathematical guarantee is that the optimal LR found on a small "proxy" model transfers to wider models that share the **same base shapes**. The base shapes file encodes which dimensions are infinite (width: d_model, d_ff) versus finite (depth, heads). `set_base_shapes(target, base)` then computes the width ratio and produces per-parameter LR multipliers. If the base equals the target, the ratio is 1 and µP becomes equivalent to SP — defeating the entire point of Phase 3.
 **Options considered:**
-1. Generate a separate `.bsh` file per model size (5 files, one pre-training step per model)
-2. Build base shapes in-memory inside `build_mup_model()` using a base and delta that match the target's depth exactly
-**Choice:** Option 2 — in-memory per-model base shapes
-**Reasoning:** I chose in-memory construction because it eliminates the pre-generation step entirely and removes the `.bsh` file as a failure point. The base and delta are constructed with the same `n_layers` and `n_heads` as the target model, with `d_model` and `d_ff` halved — this gives `mup` exactly what it needs to identify the width dimensions as infinite while keeping all parameter names aligned.
-**Impact:** I removed `make_mup_base_shapes()`, the `--make_base_shapes` CLI flag, `BASE_SHAPES_PATH`, and the `.bsh` existence check from both training scripts. `build_mup_model()` now takes only a model name and constructs base shapes internally. Notebook 03 Cell 5 was updated to a sanity-check that instantiates all 5 µP models.
+1. Save a single `.bsh` and reuse it (failed — depth mismatch)
+2. Build base = target (failed — no scaling correction applied)
+3. Build base in-memory using Tiny's widths but matching the target's depth/heads
+**Choice:** Option 3
+**Reasoning:** This preserves µP's LR transfer property while satisfying `mup`'s name-matching requirement. Each target model gets its own base/delta pair built fresh, but they share the same proxy width (Tiny's d=128, d_ff=512). For the Tiny target this is a no-op; for wider targets, `mup` correctly identifies the width dimensions as infinite and applies the right per-parameter LR scaling. n_heads in the base/delta is adjusted if it doesn't divide BASE_D_MODEL=128 (n_heads doesn't appear in any parameter shape, so this only affects whether the model can be instantiated, not the µP behavior).
+**Impact:** `build_mup_model()` now defines `BASE_D_MODEL=128, BASE_D_FF=512` as module-level constants and uses these to construct base/delta for every target. The LR sweep runs on Tiny (which IS the proxy base width), and the resulting LR transfers correctly to Small, Medium, Large, and XL via µP's per-parameter scaling.
 
 ---
 

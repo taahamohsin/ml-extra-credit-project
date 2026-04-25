@@ -197,11 +197,25 @@ class MupTransformerLM(nn.Module):
 # Base shapes helper
 # ---------------------------------------------------------------------------
 
+# Base shapes "proxy" widths — every µP model treats this as the base width.
+# The LR sweep runs on a Tiny-width proxy (BASE_D_MODEL, BASE_D_FF), and that
+# optimal LR transfers to every wider target via mup's per-parameter LR scaling.
+BASE_D_MODEL = 128
+BASE_D_FF    = 512
+
+
 def build_mup_model(name: str, **overrides) -> MupTransformerLM:
     """
     Build a µP model and apply base shapes in-memory.
-    Base and delta share the same n_layers/n_heads as the target; only d_model
-    and d_ff vary (2×) so mup correctly identifies the width as the infinite dimension.
+
+    The base/delta pair has the same n_layers and n_heads as the target (mup
+    requires identical parameter names) but uses Tiny's widths (d_model=128,
+    d_ff=512) as the base. Delta doubles those widths. mup compares the target
+    to this base to compute the correct per-parameter LR multipliers — so an
+    LR tuned on the Tiny-width "proxy" transfers correctly to every wider target.
+
+    For the Tiny target this is a no-op (base shapes == target shapes), which
+    is why we run the LR sweep on Tiny.
     """
     import dataclasses
     from mup import make_base_shapes
@@ -209,8 +223,21 @@ def build_mup_model(name: str, **overrides) -> MupTransformerLM:
     cfg   = dataclasses.replace(MODEL_CONFIGS[name], **overrides)
     model = MupTransformerLM(cfg)
 
-    base  = MupTransformerLM(dataclasses.replace(cfg, d_model=cfg.d_model,     d_ff=cfg.d_ff))
-    delta = MupTransformerLM(dataclasses.replace(cfg, d_model=cfg.d_model * 2, d_ff=cfg.d_ff * 2))
+    base_cfg  = dataclasses.replace(cfg, d_model=BASE_D_MODEL,     d_ff=BASE_D_FF)
+    delta_cfg = dataclasses.replace(cfg, d_model=BASE_D_MODEL * 2, d_ff=BASE_D_FF * 2)
+
+    # n_heads must divide d_model in both base and delta; if cfg.n_heads doesn't
+    # divide BASE_D_MODEL we adjust both base and delta to use a head count that
+    # does. mup only cares that base/delta widths differ — n_heads stays fixed
+    # within the base/delta pair.
+    if BASE_D_MODEL % cfg.n_heads != 0:
+        # Find the largest divisor of BASE_D_MODEL that is <= cfg.n_heads
+        n_heads_base = max(h for h in range(1, cfg.n_heads + 1) if BASE_D_MODEL % h == 0)
+        base_cfg  = dataclasses.replace(base_cfg,  n_heads=n_heads_base)
+        delta_cfg = dataclasses.replace(delta_cfg, n_heads=n_heads_base)
+
+    base  = MupTransformerLM(base_cfg)
+    delta = MupTransformerLM(delta_cfg)
     make_base_shapes(base, delta, savefile=None)
     set_base_shapes(model, base)
     return model
