@@ -23,6 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from mup import MuSharedReadout, set_base_shapes
+from mup.init import normal_ as mup_normal_
 from mup.optim import MuAdamW
 
 from src.model import ModelConfig, MODEL_CONFIGS, FeedForward, TransformerBlock
@@ -111,20 +112,27 @@ class MupTransformerLM(nn.Module):
         # output_mult scales the logits; default 1.0 is correct here.
         self.lm_head = MuSharedReadout(self.token_emb.weight, bias=False)
 
-        self._init_weights()
+        # NOTE: init is deferred to mup_init() in build_mup_model, called
+        # AFTER set_base_shapes attaches infshape attributes to parameters.
+        # Calling nn.init here would use SP init and break µP's variance
+        # invariants for non-base widths.
 
-    def _init_weights(self):
+    def mup_init(self):
+        """µP-aware init. Must be called AFTER set_base_shapes."""
         for module in self.modules():
             if isinstance(module, nn.Linear):
-                nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                # mup_normal_ scales std by 1/sqrt(fan_in_ratio) for hidden weights
+                mup_normal_(module.weight, mean=0.0, std=0.02)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
+                # Embedding is a "input" layer in µP — uses standard init (no width scaling)
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+        # GPT-2 residual-projection scaling (1/sqrt(2*n_layers)) on top of µP
         for name, p in self.named_parameters():
             if name.endswith("out_proj.weight") or name.endswith("net.2.weight"):
-                nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * self.cfg.n_layers))
+                mup_normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * self.cfg.n_layers))
 
     def forward(
         self,
@@ -238,6 +246,10 @@ def build_mup_model(name: str, **overrides) -> MupTransformerLM:
     delta = MupTransformerLM(delta_cfg)
     make_base_shapes(base, delta, savefile=None)
     set_base_shapes(model, base)
+
+    # Init AFTER set_base_shapes so mup_normal_ can read infshape and apply
+    # the correct width-dependent variance scaling.
+    model.mup_init()
     return model
 
 
