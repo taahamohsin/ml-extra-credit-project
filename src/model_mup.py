@@ -223,18 +223,20 @@ def build_mup_model(name: str, **overrides) -> MupTransformerLM:
     cfg   = dataclasses.replace(MODEL_CONFIGS[name], **overrides)
     model = MupTransformerLM(cfg)
 
-    base_cfg  = dataclasses.replace(cfg, d_model=BASE_D_MODEL,     d_ff=BASE_D_FF)
-    delta_cfg = dataclasses.replace(cfg, d_model=BASE_D_MODEL * 2, d_ff=BASE_D_FF * 2)
-
-    # n_heads must divide d_model in both base and delta; if cfg.n_heads doesn't
-    # divide BASE_D_MODEL we adjust both base and delta to use a head count that
-    # does. mup only cares that base/delta widths differ — n_heads stays fixed
-    # within the base/delta pair.
+    # n_heads must divide d_model in both base and delta. If cfg.n_heads doesn't
+    # divide BASE_D_MODEL we pick the largest divisor of BASE_D_MODEL that is
+    # <= cfg.n_heads. n_heads doesn't appear in any parameter shape, so this only
+    # affects whether the model can be instantiated, not the µP behavior.
+    n_heads_base = cfg.n_heads
     if BASE_D_MODEL % cfg.n_heads != 0:
-        # Find the largest divisor of BASE_D_MODEL that is <= cfg.n_heads
         n_heads_base = max(h for h in range(1, cfg.n_heads + 1) if BASE_D_MODEL % h == 0)
-        base_cfg  = dataclasses.replace(base_cfg,  n_heads=n_heads_base)
-        delta_cfg = dataclasses.replace(delta_cfg, n_heads=n_heads_base)
+
+    base_cfg  = dataclasses.replace(
+        cfg, d_model=BASE_D_MODEL,     d_ff=BASE_D_FF,     n_heads=n_heads_base
+    )
+    delta_cfg = dataclasses.replace(
+        cfg, d_model=BASE_D_MODEL * 2, d_ff=BASE_D_FF * 2, n_heads=n_heads_base
+    )
 
     base  = MupTransformerLM(base_cfg)
     delta = MupTransformerLM(delta_cfg)
