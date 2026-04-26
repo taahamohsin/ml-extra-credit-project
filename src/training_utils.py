@@ -44,18 +44,45 @@ def get_lr(
     total_steps: int,
     min_lr_ratio: float = 0.1,
 ) -> float:
-    """Cosine decay with linear warmup."""
-    min_lr = peak_lr * min_lr_ratio
+    """Cosine decay with linear warmup. Returns an absolute LR.
 
+    Prefer get_lr_factor + apply_lr in new code: assigning a single scalar to
+    every param group erases per-group LR multipliers, which breaks µP
+    (MuAdamW stores per-parameter-group multipliers in pg["lr"]).
+    """
+    return peak_lr * get_lr_factor(step, warmup_steps, total_steps, min_lr_ratio)
+
+
+def get_lr_factor(
+    step: int,
+    warmup_steps: int,
+    total_steps: int,
+    min_lr_ratio: float = 0.1,
+) -> float:
+    """Cosine-with-warmup as a unitless factor in [min_lr_ratio, 1].
+
+    Multiply each param group's stored base LR by this factor each step —
+    this preserves µP's per-group LR multipliers."""
     if step < warmup_steps:
-        return peak_lr * step / max(warmup_steps, 1)
-
+        return step / max(warmup_steps, 1)
     if step >= total_steps:
-        return min_lr
-
-    # Cosine decay phase
+        return min_lr_ratio
     progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
-    return min_lr + 0.5 * (peak_lr - min_lr) * (1.0 + math.cos(math.pi * progress))
+    return min_lr_ratio + 0.5 * (1.0 - min_lr_ratio) * (1.0 + math.cos(math.pi * progress))
+
+
+def capture_base_lrs(optimizer) -> list:
+    """Snapshot each param group's LR — call once after optimizer construction,
+    before the training loop starts mutating pg["lr"]."""
+    return [pg["lr"] for pg in optimizer.param_groups]
+
+
+def apply_lr(optimizer, base_lrs: list, factor: float) -> None:
+    """Set each pg["lr"] to base_lr * factor. Works for both AdamW (all groups
+    share the same base, so behaves identically to the old scalar assignment)
+    and MuAdamW (per-group bases preserved)."""
+    for pg, blr in zip(optimizer.param_groups, base_lrs):
+        pg["lr"] = blr * factor
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +285,13 @@ def train(
     model.train()
     scaler = None  # bf16 doesn't need a GradScaler
 
+    # Snapshot per-group base LRs ONCE. The training loop will scale these
+    # multiplicatively each step. Critical for µP: MuAdamW stores per-group
+    # LR multipliers in pg["lr"], and overwriting them with a single scalar
+    # silently disables µP. Captured here (post-optimizer-construction,
+    # post-resume) so resumed runs use the optimizer's saved state.
+    base_lrs = capture_base_lrs(optimizer)
+
     t0           = time.time()
     last_log_t   = t0
     train_iter   = iter(train_loader)
@@ -278,10 +312,11 @@ def train(
 
         x, y = x.to(device), y.to(device)
 
-        # Set LR
-        lr = get_lr(step, peak_lr, warmup_steps, total_steps)
-        for pg in optimizer.param_groups:
-            pg["lr"] = lr
+        # Set LR — multiplicative against captured per-group base LRs so
+        # MuAdamW's per-group multipliers survive.
+        factor = get_lr_factor(step, warmup_steps, total_steps)
+        apply_lr(optimizer, base_lrs, factor)
+        lr = base_lrs[0] * factor  # for logging only — matches previous semantics for AdamW
 
         # Forward + backward
         if use_bf16:

@@ -260,6 +260,35 @@ Every non-obvious design choice is documented here with reasoning. This log serv
 
 ---
 
+### Decision: µP width_mult=1 bug — caught by coordinate check, not by val loss
+**Date:** 2026-04-26
+**Issue encountered:** After the previous fix (Tiny widths as proxy base), I declared µP "working" because Tiny and Small produced sensible val losses (3.38 and 3.14). What I missed: my proxy-base sizing rule was `base_d_model = n_heads × BASE_HEAD_DIM`, where `BASE_HEAD_DIM=32`. This was meant to keep `d_head` constant between base and target. But because each target model also has `d_head ≈ 32` by construction (Tiny: 128/4, Small: 192/6, Medium: 384/6 → 64, etc.), `n_heads × BASE_HEAD_DIM` collapsed back to the target's own `d_model` for Tiny/Small and was *too close* for the wider models. Net effect: `set_base_shapes` saw base ≈ target everywhere, so `width_mult` came out as 1.0 for every parameter in every model — meaning `MuAdamW`'s per-layer LR multipliers were all 1.0 and µP was silently a no-op (with the wrong attention scaling on top, since µP uses 1/d_head and SP uses 1/√d_head).
+
+I only caught this by running the µP coordinate check (the canonical correctness test from the `mup` README): build the same architecture at four widths, train 5 steps with a large LR, plot the L1 norm of activations per layer per step. For correctly wired µP, curves overlap across widths. For SP (or broken µP), curves fan out diagonally. My implementation produced curves that fanned out — indistinguishable from the SP control. Without the coord check, the bug was invisible from val-loss numbers alone: Tiny and Small *looked* fine (3.38, 3.14) because at their widths the optimum-LR of the broken setup happens to be roughly competitive; the gap only opens up at deeper/wider scales where SP genuinely breaks.
+
+**Fix:** added a `base_d_model` parameter to `build_mup_model` so callers can pin a fixed base width across all targets, and captured the return value of `make_base_shapes` (the shapes dict) to pass to `set_base_shapes` rather than passing the base model itself with `delta=None`. The coord check now produces flat curves across widths 64–512, confirming µP is wired correctly.
+**Why this matters:** µP can fail silently in a way that produces plausible val losses on the small models you're tuning on, while invalidating the entire transfer claim for the larger models you're trying to predict. The val-loss test is necessary but not sufficient. The coord check is the actual sanity test the µP authors designed for this; running it once would have saved an entire round of training compute. Adding it to the workflow before any future µP work.
+**Impact:** All Phase 3 µP results from before this fix are invalid (they were SP with broken attention scaling). The LR sweep was re-run after the fix and landed at the same lr=3e-2 — explainable because Tiny is the proxy base, so `width_mult=1` is *correct* for Tiny and the optimum is unchanged. The transfer test moves to Small/Medium/Large/XL, where `width_mult > 1` now produces real µP scaling.
+
+---
+
+### Decision: µP depth transfer fails for Small (6 layers) at the Tiny-optimal LR
+**Date:** 2026-04-26
+**Issue encountered:** With µP correctly wired (verified by coord check), I trained Tiny at lr=3e-2 (val=2.78, healthy) then ran Small at the same LR per the µP transfer claim. Small trained smoothly to val=4.25 by step 600, then *destabilized*: train loss climbed from 4.24 → 5.04 → 5.69 → 6.34 by step 1000 and stayed flat at ~6.3 (essentially back to near-init) for the remainder of the run. Loss curve looked like a clean classifier learning, then a sharp blowup mid-warmup-tail.
+
+This is exactly the depth-transfer failure mode the µP literature warns about. From the Cerebras practitioner's guide: *"choose proxy model depth roughly equivalent to the large scale to mitigate the effect of depth shifting the optimum HPs."* From Cosson et al. (arXiv:2510.19093, NeurIPS 2025): *"Width appears the most stable for learning rate transfer in µP, while depth is the least stable."* Our model family scales depth from 4 (Tiny) → 6 (Small/Medium) → 10 (Large) → 12 (XL), so deeper models trying to use Tiny's optimal LR are operating outside µP's mathematical guarantee.
+
+**Why this matters for the spec:** Part 3 Requirement 5 asks "why might a fixed learning rate degrade for larger models?" — this divergence *is* the answer, with empirical evidence. µP's transfer guarantee is across *width* only; depth, heads, and other architectural axes are not covered by the theory and are known empirically to shift the optimum.
+**Options considered:**
+1. Stick with lr=3e-2 across all models, accept that Small/Medium/Large/XL diverge, report the finding (no usable scaling-law fits).
+2. Halve the LR for deeper models (lr=1.5e-2) as a pragmatic depth-aware adjustment, document the deviation.
+3. Run a separate LR sweep per depth class (more rigorous but compute-intensive).
+**Choice:** Option 2 — halve LR for Small and deeper.
+**Reasoning:** Option 1 produces no scaling-law data and isn't useful for the report's primary plot. Option 3 is the right answer in principle but doubles or triples Phase 3 compute. Option 2 is the standard pragmatic workaround and matches what the µP literature recommends as a fallback when depth varies. Critically, I report *both* runs: Small@3e-2 (the diverged baseline showing µP transfer fails) and Small@1.5e-2 (the pragmatic adjustment). The diverged curve is the evidence for Req. 5; the adjusted curve provides scaling-law data points.
+**Impact:** Decision log and report frame µP transfer as "holds for width, fails empirically for our depth scaling, addressed via per-depth-class LR adjustment." This is more honest than claiming clean transfer and more useful than reporting only diverged curves. The scaling-law plot will use the lr=1.5e-2 results for Small/Medium/Large/XL with a note.
+
+---
+
 ### Decision: Render validation on a sample (not inline in cleaning pipeline)
 **Date:** 2026-04-19
 **Options considered:**

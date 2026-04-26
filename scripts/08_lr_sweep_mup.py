@@ -26,7 +26,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from src.model_mup import build_mup_model, build_mup_optimizer
 from src.dataset import make_datasets
-from src.training_utils import evaluate, get_lr
+from src.training_utils import evaluate, get_lr_factor, capture_base_lrs, apply_lr
 
 from torch.utils.data import DataLoader
 
@@ -63,6 +63,10 @@ def run_one_lr(
     train_iter = iter(train_loader)
     t0 = time.time()
 
+    # Snapshot per-group base LRs so MuAdamW's per-group multipliers survive
+    # the schedule. Overwriting pg["lr"] with a single scalar erases µP.
+    base_lrs = capture_base_lrs(optimizer)
+
     for step in range(max_steps):
         try:
             x, y = next(train_iter)
@@ -72,9 +76,8 @@ def run_one_lr(
 
         x, y = x.to(device), y.to(device)
 
-        current_lr = get_lr(step, lr, warmup_steps, max_steps)
-        for pg in optimizer.param_groups:
-            pg["lr"] = current_lr
+        factor = get_lr_factor(step, warmup_steps, max_steps)
+        apply_lr(optimizer, base_lrs, factor)
 
         if use_bf16:
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
