@@ -197,11 +197,11 @@ class MupTransformerLM(nn.Module):
 # Base shapes helper
 # ---------------------------------------------------------------------------
 
-# Base shapes "proxy" widths — every µP model treats this as the base width.
-# The LR sweep runs on a Tiny-width proxy (BASE_D_MODEL, BASE_D_FF), and that
-# optimal LR transfers to every wider target via mup's per-parameter LR scaling.
-BASE_D_MODEL = 128
-BASE_D_FF    = 512
+# µP base width — the "proxy" width that every target is scaled relative to.
+# Per-target base d_model is chosen as a small multiple of target.n_heads so
+# that the base's d_head equals the target's d_head (µP requires d_head fixed
+# across base/delta/target). For Tiny this lands at d_model=BASE_HEAD_DIM*4=128.
+BASE_HEAD_DIM = 32   # d_head used in every model's base
 
 
 def build_mup_model(name: str, **overrides) -> MupTransformerLM:
@@ -209,13 +209,17 @@ def build_mup_model(name: str, **overrides) -> MupTransformerLM:
     Build a µP model and apply base shapes in-memory.
 
     The base/delta pair has the same n_layers and n_heads as the target (mup
-    requires identical parameter names) but uses Tiny's widths (d_model=128,
-    d_ff=512) as the base. Delta doubles those widths. mup compares the target
-    to this base to compute the correct per-parameter LR multipliers — so an
-    LR tuned on the Tiny-width "proxy" transfers correctly to every wider target.
+    requires identical parameter names). The base's d_model is chosen as
+    n_heads * BASE_HEAD_DIM, keeping d_head == target.d_head — this is what
+    µP's per-parameter LR multipliers expect. d_ff scales proportionally with
+    d_model from base to delta to target, so all width ratios are nontrivial.
 
-    For the Tiny target this is a no-op (base shapes == target shapes), which
-    is why we run the LR sweep on Tiny.
+    For Tiny: target d_model=128, base d_model=4*32=128 → no-op (this is why
+    we run the LR sweep on Tiny: it IS the proxy base).
+    For Small: target d=192, base d=6*32=192 → also no-op
+    For Medium: target d=384, base d=6*32=192 → 2× width ratio
+    For Large: target d=512, base d=8*32=256 → 2× width ratio
+    For XL: target d=768, base d=12*32=384 → 2× width ratio
     """
     import dataclasses
     from mup import make_base_shapes
@@ -223,20 +227,12 @@ def build_mup_model(name: str, **overrides) -> MupTransformerLM:
     cfg   = dataclasses.replace(MODEL_CONFIGS[name], **overrides)
     model = MupTransformerLM(cfg)
 
-    # n_heads must divide d_model in both base and delta. If cfg.n_heads doesn't
-    # divide BASE_D_MODEL we pick the largest divisor of BASE_D_MODEL that is
-    # <= cfg.n_heads. n_heads doesn't appear in any parameter shape, so this only
-    # affects whether the model can be instantiated, not the µP behavior.
-    n_heads_base = cfg.n_heads
-    if BASE_D_MODEL % cfg.n_heads != 0:
-        n_heads_base = max(h for h in range(1, cfg.n_heads + 1) if BASE_D_MODEL % h == 0)
+    base_d_model = cfg.n_heads * BASE_HEAD_DIM
+    # Scale d_ff with d_model so the d_ff/d_model ratio is preserved
+    base_d_ff    = cfg.d_ff * base_d_model // cfg.d_model
 
-    base_cfg  = dataclasses.replace(
-        cfg, d_model=BASE_D_MODEL,     d_ff=BASE_D_FF,     n_heads=n_heads_base
-    )
-    delta_cfg = dataclasses.replace(
-        cfg, d_model=BASE_D_MODEL * 2, d_ff=BASE_D_FF * 2, n_heads=n_heads_base
-    )
+    base_cfg  = dataclasses.replace(cfg, d_model=base_d_model,     d_ff=base_d_ff)
+    delta_cfg = dataclasses.replace(cfg, d_model=base_d_model * 2, d_ff=base_d_ff * 2)
 
     base  = MupTransformerLM(base_cfg)
     delta = MupTransformerLM(delta_cfg)
