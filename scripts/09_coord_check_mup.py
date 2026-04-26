@@ -87,12 +87,16 @@ def make_sp_lazy_model_fn(width: int):
 
 
 def random_dataloader(batch: int, seq_len: int, vocab: int, n_batches: int):
-    """Yields (input, target) pairs of random token ids — coord check is data-agnostic."""
+    """Returns a list of (input, target) tuples — coord check is data-agnostic.
+    Returns a list (not a generator) because mup.coord_check calls iter() on
+    this object multiple times (once per width × seed)."""
     g = torch.Generator().manual_seed(0)
+    out = []
     for _ in range(n_batches):
         x = torch.randint(0, vocab, (batch, seq_len), generator=g)
         y = torch.randint(0, vocab, (batch, seq_len), generator=g)
-        yield x, y
+        out.append((x, y))
+    return out
 
 
 def main():
@@ -117,9 +121,11 @@ def main():
 
     # get_coord_data takes a string optimizer name; mup=True routes to mup.optim,
     # mup=False routes to torch.optim.
+    dataloader = random_dataloader(BATCH, SEQ_LEN, VOCAB, N_STEPS)
+
     df = get_coord_data(
         models_fn,
-        lambda: random_dataloader(BATCH, SEQ_LEN, VOCAB, N_STEPS),
+        dataloader,
         optimizer="adamw",
         mup=not args.sp,
         lr=lr,
