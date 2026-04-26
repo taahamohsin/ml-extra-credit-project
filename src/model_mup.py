@@ -212,7 +212,7 @@ class MupTransformerLM(nn.Module):
 BASE_HEAD_DIM = 32   # d_head used in every model's base
 
 
-def build_mup_model(name: str, **overrides) -> MupTransformerLM:
+def build_mup_model(name: str, base_d_model: Optional[int] = None, **overrides) -> MupTransformerLM:
     """
     Build a µP model and apply base shapes in-memory.
 
@@ -235,7 +235,11 @@ def build_mup_model(name: str, **overrides) -> MupTransformerLM:
     cfg   = dataclasses.replace(MODEL_CONFIGS[name], **overrides)
     model = MupTransformerLM(cfg)
 
-    base_d_model = cfg.n_heads * BASE_HEAD_DIM
+    # Default base_d_model: n_heads * BASE_HEAD_DIM, which keeps d_head fixed
+    # at BASE_HEAD_DIM. Callers (e.g. coord check) may override to pin the
+    # base across multiple targets so width_mult is non-trivial.
+    if base_d_model is None:
+        base_d_model = cfg.n_heads * BASE_HEAD_DIM
     # Scale d_ff with d_model so the d_ff/d_model ratio is preserved
     base_d_ff    = cfg.d_ff * base_d_model // cfg.d_model
 
@@ -244,8 +248,10 @@ def build_mup_model(name: str, **overrides) -> MupTransformerLM:
 
     base  = MupTransformerLM(base_cfg)
     delta = MupTransformerLM(delta_cfg)
-    make_base_shapes(base, delta, savefile=None)
-    set_base_shapes(model, base)
+    # Capture the shapes dict — without it, set_base_shapes can't tell which
+    # dims are infinite (it would otherwise need both base and delta).
+    base_shapes = make_base_shapes(base, delta, savefile=None)
+    set_base_shapes(model, base_shapes)
 
     # Init AFTER set_base_shapes so mup_normal_ can read infshape and apply
     # the correct width-dependent variance scaling.

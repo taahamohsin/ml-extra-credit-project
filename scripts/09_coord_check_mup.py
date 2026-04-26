@@ -67,13 +67,20 @@ class CoordCheckWrapper(nn.Module):
         return {"loss": loss}
 
 
+COORD_BASE_WIDTH = 64  # pin the µP base across all coord-check targets so width_mult is non-trivial
+
+
 def make_mup_lazy_model_fn(width: int):
     n_heads = width // BASE_HEAD_DIM
     assert width % BASE_HEAD_DIM == 0, f"width {width} not divisible by BASE_HEAD_DIM {BASE_HEAD_DIM}"
+    assert COORD_BASE_WIDTH % n_heads == 0, (
+        f"base width {COORD_BASE_WIDTH} not divisible by n_heads {n_heads}"
+    )
 
     def build():
         m = build_mup_model(
             "tiny",
+            base_d_model=COORD_BASE_WIDTH,
             d_model=width,
             n_heads=n_heads,
             n_layers=DEPTH,
