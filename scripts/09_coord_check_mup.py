@@ -111,19 +111,18 @@ def main():
     if args.sp:
         models_fn = {w: make_sp_lazy_model_fn(w) for w in WIDTHS}
         lr = LR_SP
-        optcls = torch.optim.AdamW
     else:
         models_fn = {w: make_mup_lazy_model_fn(w) for w in WIDTHS}
         lr = LR_MUP
-        from mup.optim import MuAdamW
-        optcls = MuAdamW
 
+    # get_coord_data takes a string optimizer name; mup=True routes to mup.optim,
+    # mup=False routes to torch.optim.
     df = get_coord_data(
         models_fn,
         lambda: random_dataloader(BATCH, SEQ_LEN, VOCAB, N_STEPS),
+        optimizer="adamw",
         mup=not args.sp,
         lr=lr,
-        optcls=optcls,
         nsteps=N_STEPS,
         nseeds=1,
         dict_in_out=False,
