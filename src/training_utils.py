@@ -155,10 +155,15 @@ def save_checkpoint(
     train_cfg: dict,
     best_val_loss: float,
     tokens_seen: int,
+    base_lrs: Optional[list] = None,
     is_best: bool = False,
     drive_path: Optional[Path] = None,
 ) -> None:
-    """Save checkpoint locally, then optionally copy to Drive."""
+    """Save checkpoint locally, then optionally copy to Drive.
+
+    base_lrs: per-group LRs as captured at training start, before the schedule
+    starts mutating pg["lr"]. Required to resume µP training correctly —
+    capturing post-resume would snapshot a scheduled value, not the µP base."""
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # Unwrap compiled model if needed
@@ -172,6 +177,7 @@ def save_checkpoint(
         "train_cfg":     train_cfg,
         "best_val_loss": best_val_loss,
         "tokens_seen":   tokens_seen,
+        "base_lrs":      base_lrs,
     }
     tmp = path.with_suffix(".tmp")
     torch.save(ckpt, tmp)
@@ -269,6 +275,13 @@ def train(
 
     logger = CSVLogger(log_path) if log_path is not None else None
 
+    # Snapshot per-group base LRs BEFORE resume — at this point the optimizer
+    # holds its construction-time LRs (which include MuAdamW's per-group µP
+    # divisions). Capturing after resume would snapshot a post-schedule value
+    # because load_checkpoint restores pg["lr"] to whatever step N's schedule
+    # had set it to, not the original base.
+    base_lrs = capture_base_lrs(optimizer)
+
     # Resume
     start_step    = 0
     tokens_seen   = 0
@@ -280,17 +293,16 @@ def train(
         start_step    = ckpt["step"] + 1
         tokens_seen   = ckpt.get("tokens_seen", 0)
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
+        # Prefer checkpointed base_lrs if present (correct for µP); fall back
+        # to the pre-resume capture above for backward-compatibility with
+        # checkpoints written before this field was added.
+        ckpt_base_lrs = ckpt.get("base_lrs")
+        if ckpt_base_lrs is not None:
+            base_lrs = ckpt_base_lrs
         print(f"  Resumed at step {start_step}, best_val_loss={best_val_loss:.4f}")
 
     model.train()
     scaler = None  # bf16 doesn't need a GradScaler
-
-    # Snapshot per-group base LRs ONCE. The training loop will scale these
-    # multiplicatively each step. Critical for µP: MuAdamW stores per-group
-    # LR multipliers in pg["lr"], and overwriting them with a single scalar
-    # silently disables µP. Captured here (post-optimizer-construction,
-    # post-resume) so resumed runs use the optimizer's saved state.
-    base_lrs = capture_base_lrs(optimizer)
 
     t0           = time.time()
     last_log_t   = t0
@@ -392,6 +404,7 @@ def train(
                     train_cfg=train_cfg,
                     best_val_loss=best_val_loss,
                     tokens_seen=tokens_seen,
+                    base_lrs=base_lrs,
                     is_best=is_best,
                     drive_path=drive_path,
                 )
