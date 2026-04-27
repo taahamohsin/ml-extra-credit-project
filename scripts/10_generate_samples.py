@@ -141,7 +141,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    ckpt_path = (REPO_ROOT / args.checkpoint).resolve()
+    ckpt_path = REPO_ROOT / args.checkpoint
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
 
@@ -155,7 +155,7 @@ def main():
     prefix_dir.mkdir(parents=True, exist_ok=True)
 
     manifest = {
-        "checkpoint": str(ckpt_path.relative_to(REPO_ROOT)),
+        "checkpoint": args.checkpoint,
         "max_new_tokens": args.max_new_tokens,
         "top_k": args.top_k,
         "top_p": args.top_p,

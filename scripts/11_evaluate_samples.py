@@ -269,8 +269,8 @@ def main():
 
     # ---- Test-set perplexity ----
     if not args.skip_perplexity:
-        ckpt_path = (REPO_ROOT / args.checkpoint).resolve()
-        test_bin  = (REPO_ROOT / args.test_bin).resolve()
+        ckpt_path = REPO_ROOT / args.checkpoint
+        test_bin  = REPO_ROOT / args.test_bin
         if ckpt_path.exists() and test_bin.exists():
             metrics["perplexity"] = compute_test_perplexity(
                 ckpt_path=ckpt_path,
