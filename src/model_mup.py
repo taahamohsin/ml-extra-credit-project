@@ -4,7 +4,8 @@ model_mup.py
 µP (Maximal Update Parameterization) version of the decoder-only transformer.
 
 Key differences from model.py (standard parameterization):
-  1. Attention scaling: 1/d_head instead of 1/√d_head
+  1. Attention scaling: √(BASE_HEAD_DIM)/d_head, which matches SP's 1/√d_head
+     at the base width and shrinks as 1/d_head for wider targets — the µP rule.
   2. Output head replaced with MuSharedReadout (weight-tied, µP-aware)
   3. set_base_shapes() applied before optimizer creation so MuAdamW
      applies per-layer LR multipliers correctly
@@ -30,7 +31,23 @@ from src.model import ModelConfig, MODEL_CONFIGS, FeedForward, TransformerBlock
 
 
 # ---------------------------------------------------------------------------
-# µP attention: scale by 1/d_head not 1/√d_head
+# µP base width — moved above MupCausalSelfAttention because the attention
+# scaling formula references BASE_HEAD_DIM.
+# ---------------------------------------------------------------------------
+
+BASE_HEAD_DIM = 32   # d_head used in every model's base for set_base_shapes
+
+
+# ---------------------------------------------------------------------------
+# µP attention: 1/d_head behavior (not 1/√d_head), with a constant chosen so
+# that the base model has the same attention temperature as standard SP.
+# Concretely, µP prescribes scale ∝ 1/d_head; the proportionality constant is
+# √(BASE_HEAD_DIM) so that at the base width the scale equals 1/√(d_head_base),
+# matching SP. Without this constant, attention is several× colder than SP at
+# the base width, which destabilizes training and shifts the LR optimum.
+# Reference: microsoft/mup README ("attention_scores = q @ k.T * 8/d", where
+# 8 = √64 is chosen for backward-compat with d_head=64). Our base d_head is
+# BASE_HEAD_DIM=32, so the corresponding constant is √32.
 # ---------------------------------------------------------------------------
 
 class MupCausalSelfAttention(nn.Module):
@@ -61,8 +78,10 @@ class MupCausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_heads, self.d_head).transpose(1, 2)
         v = v.view(B, T, self.n_heads, self.d_head).transpose(1, 2)
 
-        # µP: scale by 1/d_head (not 1/√d_head)
-        scale = 1.0 / self.d_head
+        # µP attention scale (see comment above the class). At base width
+        # (d_head == BASE_HEAD_DIM) this equals 1/√d_head, matching SP. As
+        # d_head grows, scale shrinks as 1/d_head — the µP rule.
+        scale = math.sqrt(BASE_HEAD_DIM) / self.d_head
         att = (q @ k.transpose(-2, -1)) * scale
         att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
         att = F.softmax(att, dim=-1)
@@ -206,28 +225,35 @@ class MupTransformerLM(nn.Module):
 # ---------------------------------------------------------------------------
 
 # µP base width — the "proxy" width that every target is scaled relative to.
-# Per-target base d_model is chosen as a small multiple of target.n_heads so
-# that the base's d_head equals the target's d_head (µP requires d_head fixed
-# across base/delta/target). For Tiny this lands at d_model=BASE_HEAD_DIM*4=128.
-BASE_HEAD_DIM = 32   # d_head used in every model's base
+# Default base_d_model = n_heads * BASE_HEAD_DIM, so the BASE model has
+# d_head = BASE_HEAD_DIM. Wider targets may have larger d_head (e.g. Medium
+# with n_heads=6 and d_model=384 has d_head=64). This makes the attention
+# head dimension part of the width scaling: the µP attention scale
+# √(BASE_HEAD_DIM)/d_head matches SP's 1/√d_head at the base width and
+# shrinks as 1/d_head for wider targets — the µP-prescribed deviation.
+# (BASE_HEAD_DIM is defined near the top of this file because attention
+# scaling needs it.)
 
 
 def build_mup_model(name: str, base_d_model: Optional[int] = None, **overrides) -> MupTransformerLM:
     """
     Build a µP model and apply base shapes in-memory.
 
-    The base/delta pair has the same n_layers and n_heads as the target (mup
-    requires identical parameter names). The base's d_model is chosen as
-    n_heads * BASE_HEAD_DIM, keeping d_head == target.d_head — this is what
-    µP's per-parameter LR multipliers expect. d_ff scales proportionally with
-    d_model from base to delta to target, so all width ratios are nontrivial.
+    The base/delta pair shares n_layers and n_heads with the target (mup
+    requires identical parameter names across base/target). Default
+    base_d_model = n_heads * BASE_HEAD_DIM, so the base has d_head =
+    BASE_HEAD_DIM = 32. d_ff scales proportionally with d_model so width
+    ratios are non-trivial for the deeper targets.
 
-    For Tiny: target d_model=128, base d_model=4*32=128 → no-op (this is why
-    we run the LR sweep on Tiny: it IS the proxy base).
-    For Small: target d=192, base d=6*32=192 → also no-op
-    For Medium: target d=384, base d=6*32=192 → 2× width ratio
-    For Large: target d=512, base d=8*32=256 → 2× width ratio
-    For XL: target d=768, base d=12*32=384 → 2× width ratio
+    width_mult per target with the default base sizing:
+      Tiny:   target d=128, base=4*32=128  → 1×  (proxy base — no-op)
+      Small:  target d=192, base=6*32=192  → 1×  (also no-op; same d_head=32)
+      Medium: target d=384, base=6*32=192  → 2×  (d_head: 32 base → 64 target)
+      Large:  target d=512, base=8*32=256  → 2×  (d_head: 32 base → 64 target)
+      XL:     target d=768, base=12*32=384 → 2×  (d_head: 32 base → 64 target)
+
+    Callers (e.g. coord check) may override base_d_model to pin a fixed base
+    across multiple targets and produce non-trivial width_mult for diagnostics.
     """
     import dataclasses
     from mup import make_base_shapes

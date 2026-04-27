@@ -220,6 +220,8 @@ def main():
     result = {
         "model_name":      model_name,
         "n_params":        n_params,
+        # See scripts/07_train_mup.py for why both are saved.
+        "final_val_loss":  summary.get("final_val_loss", summary["best_val_loss"]),
         "best_val_loss":   summary["best_val_loss"],
         "tokens_seen":     summary["tokens_seen"],
         "total_steps":     total_steps,
@@ -234,7 +236,8 @@ def main():
 
     print("\n" + "=" * 60)
     print(f"TRAINING COMPLETE — {model_name.upper()}")
-    print(f"  Val loss (best): {summary['best_val_loss']:.4f}")
+    print(f"  Val loss (final, 1 epoch): {summary.get('final_val_loss', summary['best_val_loss']):.4f}")
+    print(f"  Val loss (best):           {summary['best_val_loss']:.4f}")
     print(f"  Tokens seen:     {summary['tokens_seen']:,}")
     print(f"  Wall time:       {wall_min:.1f} min")
     if device.type == "cuda":

@@ -8,7 +8,10 @@ Base shapes are built in-memory per model — no .bsh file needed.
 Local-first I/O: all heavy writes go to /tmp/, copied to Drive at checkpoints.
 
 Usage:
-    python scripts/07_train_mup.py --model_name xl --lr 1e-3 --grad_accum 2 --resume
+    python scripts/07_train_mup.py --model_name xl --lr 1e-3 --grad_accum 2
+
+Note: --resume is disabled for µP runs after the attention-scaling patch.
+Pre-patch checkpoints used a different attention scale and are incompatible.
 """
 
 import argparse
@@ -75,6 +78,18 @@ def main():
     local_ckpt_dir = Path("/tmp/checkpoints_mup_local")
     drive_ckpt_dir = REPO_ROOT / "outputs" / "checkpoints_mup"
 
+    # Fail fast on --resume (disabled for µP after the attention-scaling patch).
+    # Pre-patch checkpoints used bare 1/d_head attention scale and are not
+    # compatible with the current model. Doing this before model/data loading
+    # so the user doesn't wait 30s before the error.
+    if args.resume:
+        raise RuntimeError(
+            "--resume is disabled for µP runs after the attention-scaling patch. "
+            "Pre-patch µP checkpoints used bare 1/d_head attention scale, which "
+            "is incompatible with the current model. Delete old µP checkpoints "
+            "and result JSONs and rerun from scratch."
+        )
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
@@ -128,18 +143,8 @@ def main():
         weight_decay=tcfg["optimizer"]["weight_decay"],
     )
 
-    # -----------------------------------------------------------------------
-    # Resume
-    # -----------------------------------------------------------------------
+    # Resume guarded earlier; resume_from stays None for µP runs.
     resume_from = None
-    if args.resume:
-        resume_from = find_latest_checkpoint(local_ckpt_dir, model_name)
-        if resume_from is None:
-            resume_from = find_latest_checkpoint(drive_ckpt_dir, model_name)
-        if resume_from:
-            print(f"Will resume from: {resume_from}")
-        else:
-            print("No checkpoint found — starting from scratch.")
 
     # -----------------------------------------------------------------------
     # Train
@@ -193,6 +198,11 @@ def main():
         "model_name":       model_name,
         "parameterization": "mup",
         "n_params":         n_params,
+        # final_val_loss is val loss after the last eval (= 1 epoch). The spec
+        # asks for "validation loss after 1 epoch" so this is the canonical
+        # number for the scaling-law plot. best_val_loss is also reported for
+        # diagnostic purposes — useful for spotting late-training divergence.
+        "final_val_loss":   summary["final_val_loss"],
         "best_val_loss":    summary["best_val_loss"],
         "tokens_seen":      summary["tokens_seen"],
         "total_steps":      total_steps,
@@ -207,7 +217,8 @@ def main():
 
     print("\n" + "=" * 60)
     print(f"µP TRAINING COMPLETE — {model_name.upper()}")
-    print(f"  Val loss (best): {summary['best_val_loss']:.4f}")
+    print(f"  Val loss (final, 1 epoch): {summary['final_val_loss']:.4f}")
+    print(f"  Val loss (best):           {summary['best_val_loss']:.4f}")
     print(f"  Wall time:       {wall_min:.1f} min")
     if device.type == "cuda":
         print(f"  Peak GPU mem:    {torch.cuda.max_memory_allocated(device)/1e9:.2f} GB")

@@ -283,9 +283,10 @@ def train(
     base_lrs = capture_base_lrs(optimizer)
 
     # Resume
-    start_step    = 0
-    tokens_seen   = 0
-    best_val_loss = float("inf")
+    start_step     = 0
+    tokens_seen    = 0
+    best_val_loss  = float("inf")
+    final_val_loss = float("nan")  # val loss at the most recent eval; "final" once training ends
 
     if resume_from is not None and resume_from.exists():
         print(f"Resuming from {resume_from} ...")
@@ -360,6 +361,7 @@ def train(
         val_loss = None
         if step % eval_interval == 0 or step == total_steps - 1:
             val_loss = evaluate(model, val_loader, device, use_bf16=use_bf16)
+            final_val_loss = val_loss  # most recent eval; persists as "final" after the last eval
             is_best  = val_loss < best_val_loss
             if is_best:
                 best_val_loss = val_loss
@@ -433,9 +435,10 @@ def train(
           f"Total time: {wall_time/60:.1f} min")
 
     return {
-        "step":          step - 1,
-        "train_loss":    train_loss,
-        "best_val_loss": best_val_loss,
-        "tokens_seen":   tokens_seen,
-        "wall_time_sec": wall_time,
+        "step":           step - 1,
+        "train_loss":     train_loss,
+        "best_val_loss":  best_val_loss,
+        "final_val_loss": final_val_loss,
+        "tokens_seen":    tokens_seen,
+        "wall_time_sec":  wall_time,
     }
