@@ -262,6 +262,8 @@ def main():
     ap.add_argument("--plots_dir", default="outputs/plots")
     ap.add_argument("--prefix_temperature", type=float, default=0.8,
                     help="Temperature to use in the prefix-completion figure")
+    ap.add_argument("--rows", type=int, default=2,
+                    help="Rows in the unconditional grid (cols fixed at 5)")
     args = ap.parse_args()
 
     samples_dir  = REPO_ROOT / args.samples_dir
@@ -280,6 +282,7 @@ def main():
         samples_dir=samples_dir,
         rendered_dir=rendered_dir,
         out_path=plots_dir / "samples_unconditional_grid.png",
+        rows=args.rows,
     )
     plot_temperature_comparison(
         manifest=manifest,
