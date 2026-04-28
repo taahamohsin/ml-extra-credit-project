@@ -57,6 +57,7 @@ def render_svg_string_to_array(svg: str, output_size: int = 256):
 
 def show_image_or_text(ax, png_path: Path | None, svg_text: str, title: str):
     """Show a PNG if it exists, else fall back to the truncated SVG code."""
+    ax.clear()
     img = None
     if png_path is not None and os.path.exists(str(png_path)):
         try:
