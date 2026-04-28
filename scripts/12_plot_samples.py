@@ -68,10 +68,9 @@ def show_image_or_text(ax, png_path: Path | None, svg_text: str, title: str):
     if img is not None:
         ax.imshow(img)
     else:
-        snippet = (svg_text[:120] + "...") if len(svg_text) > 120 else svg_text
-        ax.text(0.5, 0.5, snippet, ha="center", va="center",
-                fontsize=6, family="monospace", wrap=True,
-                transform=ax.transAxes)
+        ax.set_facecolor("#cccccc")
+        ax.text(0.5, 0.5, "Failed to render", ha="center", va="center",
+                fontsize=9, color="#555555", transform=ax.transAxes)
     ax.set_title(title, fontsize=9)
     ax.axis("off")
 
