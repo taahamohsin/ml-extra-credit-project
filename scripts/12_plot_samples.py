@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -57,9 +58,9 @@ def render_svg_string_to_array(svg: str, output_size: int = 256):
 def show_image_or_text(ax, png_path: Path | None, svg_text: str, title: str):
     """Show a PNG if it exists, else fall back to the truncated SVG code."""
     img = None
-    if png_path is not None and png_path.exists():
+    if png_path is not None and os.path.exists(str(png_path)):
         try:
-            img = imread(png_path)
+            img = imread(str(png_path))
         except Exception:
             img = None
 
@@ -101,14 +102,18 @@ def plot_unconditional_grid(
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 2.6, rows * 2.8))
     axes = axes.flatten() if hasattr(axes, "flatten") else [axes]
 
+    found = 0
     for ax, item in zip(axes, items):
         svg_path = samples_dir / item["file"]
         rel = Path(item["file"])
         png_path = rendered_dir / rel.parent.name / rel.with_suffix(".png").name
         svg_text = svg_path.read_text(encoding="utf-8", errors="replace") \
-                   if svg_path.exists() else ""
+                   if os.path.exists(str(svg_path)) else ""
+        if os.path.exists(str(png_path)):
+            found += 1
         title = f"t={item['temperature']:.1f}  ({item['n_tokens']} tok)"
         show_image_or_text(ax, png_path, svg_text, title)
+    print(f"  Unconditional grid: {found}/{len(items)} PNGs found at {rendered_dir / 'unconditional'}")
 
     # Hide unused cells
     for ax in axes[len(items):]:
@@ -164,7 +169,7 @@ def plot_temperature_comparison(
             rel = Path(it["file"])
             png_path = rendered_dir / rel.parent.name / rel.with_suffix(".png").name
             svg_text = svg_path.read_text(encoding="utf-8", errors="replace") \
-                       if svg_path.exists() else ""
+                       if os.path.exists(str(svg_path)) else ""
             title = f"prefix {pi}  t={t}"
             show_image_or_text(ax, png_path, svg_text, title)
 
@@ -234,7 +239,7 @@ def plot_prefix_completion(
         rel = Path(it["file"])
         png_path = rendered_dir / rel.parent.name / rel.with_suffix(".png").name
         svg_text = svg_path.read_text(encoding="utf-8", errors="replace") \
-                   if svg_path.exists() else ""
+                   if os.path.exists(str(svg_path)) else ""
         show_image_or_text(axes[r][1], png_path, svg_text,
                            f"Completion (t={it['temperature']})")
 
