@@ -68,9 +68,9 @@ def show_image_or_text(ax, png_path: Path | None, svg_text: str, title: str):
     if img is not None:
         ax.imshow(img)
     else:
-        ax.set_facecolor("#cccccc")
-        ax.text(0.5, 0.5, "Failed to render", ha="center", va="center",
-                fontsize=9, color="#555555", transform=ax.transAxes)
+        ax.set_facecolor("#f5cccc")
+        ax.text(0.5, 0.5, "Invalid SVG\n(model output)", ha="center", va="center",
+                fontsize=8, color="#8b0000", transform=ax.transAxes)
     ax.set_title(title, fontsize=9)
     ax.axis("off")
 
@@ -228,10 +228,10 @@ def plot_prefix_completion(
         if img is not None:
             axes[r][0].imshow(img)
         else:
-            axes[r][0].set_facecolor("#cccccc")
-            axes[r][0].text(0.5, 0.5, "Failed to render", ha="center", va="center",
-                            fontsize=9, color="#555555",
-                            transform=axes[r][0].transAxes)
+            axes[r][0].set_facecolor("#e8e8e8")
+            axes[r][0].text(0.5, 0.5, "Incomplete by design\n(partial prefix)",
+                            ha="center", va="center", fontsize=8, color="#555555",
+                            style="italic", transform=axes[r][0].transAxes)
         axes[r][0].set_title(f"Prefix {it['prefix_index']} (input)", fontsize=9)
         axes[r][0].axis("off")
 
