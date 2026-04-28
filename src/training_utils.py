@@ -311,6 +311,7 @@ def train(
     step         = start_step
     micro_step   = 0
     accum_loss   = 0.0
+    train_loss   = float("nan")  # populated by the first optimizer step; nan if loop is empty (resume past end)
 
     print(f"\nTraining {model_name} for {total_steps} steps "
           f"(bf16={use_bf16}, grad_accum={grad_accum_steps})")

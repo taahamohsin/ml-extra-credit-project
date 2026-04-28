@@ -34,13 +34,20 @@ from src.model import TransformerLM
 from src.tokenizer_utils import load_tokenizer, BOS_ID, EOS_ID
 
 
-# Five fixed prefixes from the blueprint (Phase 4.3).
+# Canonical SVG header observed in training data (BPE-merged into a small
+# number of tokens). Generation prompts must start with this exact string,
+# otherwise the tokenization differs from training and the model emits
+# off-distribution garbage.
+SVG_HEADER = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="200px" width="200px">'
+
+# Five fixed prefixes from the blueprint (Phase 4.3), prepended with the
+# canonical header so the model sees a training-distribution prefix.
 PREFIXES = [
-    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="black"/><circle cx="9" cy="10" r="1" fill="black"/>',
-    '<svg viewBox="0 0 24 24"><path d="M2 12 L12 2 L22 12',
-    '<svg viewBox="0 0 24 24"><g fill="red"><rect x="4" y="4" width="6" height="6"/>',
-    '<svg viewBox="0 0 24 24"><polygon points="12,2 15,9',
-    '<svg viewBox="0 0 24 24"><g transform="translate(12,12)"><circle r="10" fill="none" stroke="blue"/>',
+    SVG_HEADER + '<circle cx="12" cy="12" r="10" fill="none" stroke="black"/><circle cx="9" cy="10" r="1" fill="black"/>',
+    SVG_HEADER + '<path d="M2 12 L12 2 L22 12',
+    SVG_HEADER + '<g fill="red"><rect x="4" y="4" width="6" height="6"/>',
+    SVG_HEADER + '<polygon points="12,2 15,9',
+    SVG_HEADER + '<g transform="translate(12,12)"><circle r="10" fill="none" stroke="blue"/>',
 ]
 
 TEMPERATURES = [0.5, 0.8, 1.0]
@@ -49,6 +56,7 @@ TEMPERATURES = [0.5, 0.8, 1.0]
 # ---------------------------------------------------------------------------
 # Model loading
 # ---------------------------------------------------------------------------
+
 
 def load_model_from_checkpoint(ckpt_path: Path, device: torch.device) -> TransformerLM:
     """Build a TransformerLM from a checkpoint and load its weights."""
@@ -59,7 +67,7 @@ def load_model_from_checkpoint(ckpt_path: Path, device: torch.device) -> Transfo
     state = ckpt["model"]
     # Strip any "_orig_mod." prefix added by torch.compile
     cleaned = {
-        (k[len("_orig_mod."):] if k.startswith("_orig_mod.") else k): v
+        (k[len("_orig_mod.") :] if k.startswith("_orig_mod.") else k): v
         for k, v in state.items()
     }
     model.load_state_dict(cleaned)
@@ -79,6 +87,7 @@ def load_model_from_checkpoint(ckpt_path: Path, device: torch.device) -> Transfo
 # ---------------------------------------------------------------------------
 # Generation helper
 # ---------------------------------------------------------------------------
+
 
 @torch.no_grad()
 def generate_one(
@@ -124,18 +133,27 @@ def generate_one(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--checkpoint", type=str,
-                    default="outputs/checkpoints/xl/best.pt")
+    ap.add_argument("--checkpoint", type=str, default="outputs/checkpoints/xl/best.pt")
     ap.add_argument("--tokenizer_dir", type=str, default="outputs/tokenizer")
     ap.add_argument("--out_dir", type=str, default="outputs/samples")
-    ap.add_argument("--n_uncond", type=int, default=15,
-                    help="Total unconditional samples (split across temperatures)")
+    ap.add_argument(
+        "--n_uncond",
+        type=int,
+        default=15,
+        help="Total unconditional samples (split across temperatures)",
+    )
     ap.add_argument("--max_new_tokens", type=int, default=1024)
     ap.add_argument("--top_k", type=int, default=50)
     ap.add_argument("--top_p", type=float, default=0.95)
     ap.add_argument("--seed_base", type=int, default=12345)
+    ap.add_argument("--uncond_prompt", type=str,
+                    default=SVG_HEADER,
+                    help="Prompt for unconditional generation. Should match the "
+                         "canonical SVG header seen in training so the BPE "
+                         "tokenization matches and the model is in-distribution.")
     args = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -173,8 +191,9 @@ def main():
         for k in range(n_per_temp):
             seed = args.seed_base + sample_idx
             text, ids = generate_one(
-                model, tokenizer,
-                prompt="<svg",
+                model,
+                tokenizer,
+                prompt=args.uncond_prompt,
                 temperature=temp,
                 top_k=args.top_k,
                 top_p=args.top_p,
@@ -184,25 +203,32 @@ def main():
             )
             fname = f"uncond_t{temp:.1f}_{k:02d}.svg"
             (uncond_dir / fname).write_text(text, encoding="utf-8")
-            manifest["unconditional"].append({
-                "file": f"unconditional/{fname}",
-                "temperature": temp,
-                "seed": seed,
-                "n_tokens": len(ids),
-            })
-            print(f"  [{sample_idx+1}/{n_per_temp*len(TEMPERATURES)}] "
-                  f"t={temp}  tokens={len(ids):>4}  {fname}")
+            manifest["unconditional"].append(
+                {
+                    "file": f"unconditional/{fname}",
+                    "temperature": temp,
+                    "seed": seed,
+                    "n_tokens": len(ids),
+                }
+            )
+            print(
+                f"  [{sample_idx + 1}/{n_per_temp * len(TEMPERATURES)}] "
+                f"t={temp}  tokens={len(ids):>4}  {fname}"
+            )
             sample_idx += 1
 
     # ---------- Prefix-conditioned ----------
-    print(f"\n=== Prefix-conditioned generation "
-          f"({len(PREFIXES)} prefixes × {len(TEMPERATURES)} temps) ===")
+    print(
+        f"\n=== Prefix-conditioned generation "
+        f"({len(PREFIXES)} prefixes × {len(TEMPERATURES)} temps) ==="
+    )
     sample_idx = 0
     for p_idx, prefix in enumerate(PREFIXES):
         for temp in TEMPERATURES:
             seed = args.seed_base + 1000 + sample_idx
             text, ids = generate_one(
-                model, tokenizer,
+                model,
+                tokenizer,
                 prompt=prefix,
                 temperature=temp,
                 top_k=args.top_k,
@@ -213,14 +239,16 @@ def main():
             )
             fname = f"prefix{p_idx}_t{temp:.1f}.svg"
             (prefix_dir / fname).write_text(text, encoding="utf-8")
-            manifest["prefix"].append({
-                "file": f"prefix/{fname}",
-                "prefix_index": p_idx,
-                "prefix": prefix,
-                "temperature": temp,
-                "seed": seed,
-                "n_tokens": len(ids),
-            })
+            manifest["prefix"].append(
+                {
+                    "file": f"prefix/{fname}",
+                    "prefix_index": p_idx,
+                    "prefix": prefix,
+                    "temperature": temp,
+                    "seed": seed,
+                    "n_tokens": len(ids),
+                }
+            )
             print(f"  prefix {p_idx} t={temp}  tokens={len(ids):>4}  {fname}")
             sample_idx += 1
 
@@ -235,3 +263,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+""
