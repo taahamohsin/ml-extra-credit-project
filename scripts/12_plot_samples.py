@@ -223,13 +223,14 @@ def plot_prefix_completion(
             prefix_render = prefix_str + "</svg>"
         else:
             prefix_render = prefix_str
+        axes[r][0].clear()
         img = render_svg_string_to_array(prefix_render)
         if img is not None:
             axes[r][0].imshow(img)
         else:
-            snippet = prefix_str if len(prefix_str) <= 120 else prefix_str[:120] + "..."
-            axes[r][0].text(0.5, 0.5, snippet, ha="center", va="center",
-                            fontsize=6, family="monospace", wrap=True,
+            axes[r][0].set_facecolor("#cccccc")
+            axes[r][0].text(0.5, 0.5, "Failed to render", ha="center", va="center",
+                            fontsize=9, color="#555555",
                             transform=axes[r][0].transAxes)
         axes[r][0].set_title(f"Prefix {it['prefix_index']} (input)", fontsize=9)
         axes[r][0].axis("off")
