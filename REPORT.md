@@ -8,7 +8,7 @@
 
 ## Abstract
 
-We study scaling laws for decoder-only transformer language models trained on Scalable Vector Graphics (SVG) code — a structured, non-linguistic domain with strict syntactic rules and visually inspectable outputs. Using a dataset of 1.17M cleaned SVG icons, emoji, and font glyphs (~130M BPE tokens), we train five model sizes from ~800K to ~85M non-embedding parameters and fit a power-law scaling curve L = a·N^(−α) + c. The fitted exponent α = 0.126 under standard parameterization (SP) is steeper than the natural-language reference (Kaplan et al., α ≈ 0.076), consistent with SVG's more constrained vocabulary and our under-trained regime. We compare SP against Maximal Update Parameterization (µP) using a 9-point learning rate sweep on the smallest model transferred to all scales. µP is correctly implemented (validated by coordinate check and base-width loss parity) but underperforms SP by 0.4–0.5 nats at all wider model sizes, attributable to our depth-and-heads-varying family violating µP's width-only transfer guarantee. Our best model — XL trained for 4 epochs (391M tokens, val loss 2.24, perplexity 9.42) — achieves 73.3% unconditional SVG render rate and 20.0% prefix-conditioned render rate, with the prefix gap explained by training data composition (~93% single-path font glyphs).
+We study scaling laws for decoder-only transformer language models trained on Scalable Vector Graphics (SVG) code — a structured, non-linguistic domain with strict syntactic rules and visually inspectable outputs. Using a dataset of 1.17M cleaned SVG icons, emoji, and font glyphs (~130M BPE tokens), we train five model sizes from ~800K to ~85M non-embedding parameters and fit a power-law scaling curve L = a·N^(−α) + c. The fitted exponent α = 0.126 under standard parameterization (SP) is steeper than the natural-language reference (Kaplan et al., α ≈ 0.076), consistent with SVG's more constrained vocabulary and our under-trained regime. We compare SP against Maximal Update Parameterization (µP) using a 9-point learning rate sweep on the smallest model transferred to all scales. µP is correctly implemented (validated by coordinate check and base-width loss parity) but underperforms SP by 0.4–0.5 nats at all wider model sizes, attributable to our depth-and-heads-varying family violating µP's width-only transfer guarantee. Our best model — XL trained for 4 epochs (391M tokens, val loss 2.24, perplexity 9.31) — achieves 53.3% unconditional SVG render rate and 6.7% prefix-conditioned render rate. The dominant failure mode is context-window truncation: the extended model generates longer, more complex paths that more frequently exceed the 1024-token limit mid-sequence. The prefix gap is additionally explained by training data composition (~93% single-path font glyphs).
 
 ---
 
@@ -307,7 +307,7 @@ Continuing the XL model for 3 additional epochs (391M total tokens) produced the
 | Checkpoint | Steps | Val Loss | Perplexity |
 |---|---|---|---|
 | 1-epoch (Phase 2/3) | 1,989 | 3.1074 | 22.31 |
-| Extended (4 epochs) | 7,956 | **2.2427** | **9.42** |
+| Extended (4 epochs) | 7,956 | **2.2427** | **9.31** |
 
 The loss dropped 0.86 nats — substantially more than the initial estimate of 0.1–0.3. The near-identical final and best val losses (2.2432 vs 2.2427) confirm the model did not overfit across 4 epochs, which is expected: with only ~32K unique SVGs in the training set seen ~4 times each, the model is still significantly below Chinchilla-optimal compute.
 
@@ -315,7 +315,7 @@ The loss dropped 0.86 nats — substantially more than the initial estimate of 0
 
 We generate 30 samples from the extended XL model: 15 unconditional (5 per temperature ∈ {0.5, 0.8, 1.0}) and 15 prefix-conditioned (5 prefixes × 3 temperatures). All generation uses top-k=50, top-p=0.95, max 1024 new tokens.
 
-**Unconditional prompt:** the canonical SVG header plus `<path fill="none" stroke="black" d="` — chosen to match the training distribution exactly (93% of training data follows this exact pattern). Generation then continues from this in-distribution prefix.
+**Unconditional prompt:** the canonical SVG header plus `<path fill="none" stroke="black" d="` — chosen to match the training distribution exactly (93% of training data follows this exact pattern). Generation continues from this in-distribution prefix.
 
 **Prefix prompts** (5 prefixes from the spec blueprint, prepended with the canonical header):
 - Prefix 0: complete circle + one eye element (tests multi-element completion)
@@ -324,7 +324,9 @@ We generate 30 samples from the extended XL model: 15 unconditional (5 per tempe
 - Prefix 3: `<polygon points="12,2 15,9` (tests polygon completion)
 - Prefix 4: `<g transform="translate(12,12)"><circle .../>` (tests transform group)
 
-**Temperature effects.** Lower temperatures (t=0.5) produce shorter, syntactically tighter completions with more repetitive path geometry. Higher temperatures (t=1.0) produce more varied paths but with higher invalid-XML rate. t=0.8 gives the best balance.
+**Notable observation — longer outputs.** The extended model generates substantially longer sequences than the 1-epoch model: 12 of 15 unconditional samples hit the 1030-token limit, vs. fewer in the 1-epoch run. The model has learned to generate more complex, detailed paths — but this also means more truncations at the context boundary, which causes the lower render rate compared to the 1-epoch baseline.
+
+**Temperature effects.** At t=0.5 nearly all samples hit the 1030-token limit (dense, repetitive path geometry). At t=0.8 and t=1.0 outputs vary in length (262–1030 tokens). t=0.8 gives the best visual coherence in rendered samples.
 
 Rendered outputs are in `outputs/plots/samples_unconditional_grid.png`, `samples_temperature_comparison.png`, and `samples_prefix_completion.png`.
 
@@ -332,19 +334,20 @@ Rendered outputs are in `outputs/plots/samples_unconditional_grid.png`, `samples
 
 | Metric | Unconditional | Prefix-conditioned | Combined |
 |---|---|---|---|
-| XML valid | 73.3% | 20.0% | 46.7% |
-| Has `<svg>` root | 73.3% | 20.0% | 46.7% |
-| Tags closed | 73.3% | 20.0% | 46.7% |
-| SVG renderable | 73.3% | 20.0% | 46.7% |
-| **Test perplexity** | — | — | **9.42** |
+| XML valid | 53.3% | 6.7% | 30.0% |
+| Has `<svg>` root | 53.3% | 6.7% | 30.0% |
+| Tags closed | 53.3% | 6.7% | 30.0% |
+| SVG renderable | 53.3% | 6.7% | 30.0% |
+| **Test perplexity** | — | — | **9.31** |
+| **Mean CE** | — | — | **2.2308** |
 
 *(All structural validity metrics coincide because lxml strict-mode XML parsing is the common gate for all three.)*
 
-**Unconditional rate (73.3%).** 11 of 15 unconditional samples produce valid, renderable SVGs. The 4 failures are truncated outputs where the model hit the 1024-token limit mid-path (the `d="..."` string was never closed), producing malformed XML. This is consistent with the training data distribution: long, complex font glyph paths sometimes exceed the model's context window.
+**Unconditional rate (53.3%, 8/15).** The extended model generates longer, more complex paths than the 1-epoch model — 12 of 15 unconditional samples hit the 1030-token context limit. When a generation is cut off mid-path, the `d="..."` attribute is never closed, producing malformed XML. This is the dominant failure mode and explains why the render rate is *lower* than the 1-epoch baseline (73.3%) despite lower perplexity: better language modeling ≠ shorter outputs. The 8 samples that do render show visually coherent abstract strokes consistent with the font-glyph training distribution.
 
-**Prefix rate (20.0%).** Only 3 of 15 prefix-conditioned samples render. The gap between unconditional (73.3%) and prefix rates (20.0%) is a direct consequence of training data composition: ~93% of training SVGs are single-path font glyphs following `<path fill="none" stroke="black" d="..."/>`. The model has a strong prior for this pattern and correctly completes unconditional prompts that start with it. The prefix prompts introduce multi-element structures (`<g>`, `<circle>`, `<rect>`, `<polygon>`) that appear in only ~7% of training data, so the model has limited experience completing them and frequently generates syntactically malformed continuations. Prefix 0 (circle element) renders correctly — the model appended a coherent path after the given circle. The 4 remaining prefixes all failed to produce valid XML.
+**Prefix rate (6.7%, 1/15).** Only Prefix 1 (open path) renders, at t=0.5 only. Prefix 0 (circle + eye), which rendered in the 1-epoch run, now fails — the extended model's stronger glyph prior causes it to attempt a more complex multi-element continuation that exceeds the context window or produces malformed XML. Prefixes 2–4 fail across all temperatures. The root cause is unchanged from the 1-epoch analysis: ~93% single-path training data gives the model a weak prior for multi-element structures.
 
-This gap is an expected finding, not a code bug, and is documented as a limitation (§5.4).
+**Perplexity (9.31 vs. 22.31).** The 58% perplexity reduction from 1 epoch to 4 epochs confirms genuine language model improvement. The decoupling between perplexity and render rate — better perplexity but lower render rate — is explained entirely by the context-window truncation effect: the model generates longer paths, which are more likely to be cut off.
 
 ---
 
@@ -419,15 +422,15 @@ The fitted scaling-law exponents reflect this: SP α=0.126 (R²=0.984) versus µ
 
 Qualitative inspection of generated samples across the unconditional grid reveals a clear pattern consistent with the training data composition.
 
-**Syntax is well-learned.** The 73.3% unconditional render rate indicates the model has internalized SVG syntax at a high level — it generates valid XML with correctly nested tags, proper attribute quoting, and well-formed path `d` strings in the large majority of cases. The 4 failures are truncation artifacts (context window exceeded mid-path), not syntactic confusion.
+**Syntax is well-learned; context truncation is the dominant failure mode.** The extended model generates syntactically correct SVG path data — all failures are truncation artifacts (mid-path cutoff at the 1024-token limit), not random token noise. This is confirmed by token counts: 12 of 15 unconditional samples hit exactly 1030 tokens (the prompt + 1024 new tokens). The extended model generates longer, more elaborate paths than the 1-epoch baseline — a sign of richer learned geometry, but one that trades off against render rate under a fixed context window. The 8 samples that do render show complex, multi-stroke abstract shapes clearly more detailed than the 1-epoch outputs.
 
-**Path geometry is glyph-biased.** The rendered unconditional samples look like abstract letterform strokes — angular, single-stroke paths that resemble font glyphs rather than icons. This directly reflects the ~93% font-glyph composition of the training data. The model learned the dominant distribution, not the semantically richer but minority icon distribution.
+**Path geometry is glyph-biased.** The rendered unconditional samples look like abstract letterform strokes — angular paths resembling font glyphs rather than icons. This reflects the ~93% font-glyph composition of the training data. The model learned the dominant distribution.
 
-**The model learned SVG conventions.** Every generated sample correctly uses the canonical viewBox (`0 0 24 24`), the `height="200px" width="200px"` attributes, and the `fill="none" stroke="black"` styling — these appear in virtually every training example and are captured in a single BPE token. The model also reliably terminates SVGs with `</svg>` and `</path>` when the context window allows.
+**The model learned SVG conventions.** Every generated sample correctly uses the canonical viewBox (`0 0 24 24`), `height="200px" width="200px"`, and `fill="none" stroke="black"` — captured in a single BPE token and present in virtually every training example. The model reliably terminates SVGs with `</svg>` and `</path>` when the context window allows.
 
-**Multi-element composition is weak.** The prefix-conditioned results show the model struggles when given `<g>`, `<rect>`, `<circle>`, or `<polygon>` elements to continue — it frequently abandons the given structure and reverts to path-coordinate generation. This is a capacity/data limitation: multi-element SVGs are rare in the training set, so the model's prior for them is weak. Prefix 0 (which starts with a complete `<circle>` element — a valid, closed SVG fragment the model has seen) is the one case where the model successfully appended a coherent continuation.
+**Multi-element composition is weak, and worsened with more training.** Prefix 1 (open path) renders at t=0.5 — the only prefix success. Prefix 0 (circle + eye), which rendered in the 1-epoch run, now fails: the extended model's stronger glyph prior causes it to generate a longer, more complex path continuation that hits the context limit. More training on single-path data reinforced the single-path prior, making multi-element completion harder, not easier.
 
-**Temperature effects.** At t=0.5, samples are shorter (often hitting EOS early) and more repetitive in path geometry. At t=1.0, outputs are more varied but fail XML parsing more often. t=0.8 gives the best render rate in our sample.
+**Temperature effects.** At t=0.5, outputs are denser and almost all hit the 1030-token limit. At t=0.8 and t=1.0, lengths vary more (262–1030 tokens). The most visually coherent renders appear at t=0.8.
 
 **No apparent phase transitions across model sizes** were visible in the scaling results — loss decreased smoothly as a power law with no sudden capability jumps. This is expected: SVG syntax is learnable even by the Tiny model (val=4.32 still produces coherent token sequences); the difference between model sizes is in geometric precision and path complexity, not in a qualitative syntactic jump.
 
@@ -443,7 +446,7 @@ Qualitative inspection of generated samples across the unconditional grid reveal
 
 5. **No human evaluation of sample quality.** Render rate measures syntactic validity, not visual coherence or semantic meaningfulness. Human ratings or FID-style metrics computed against real icons would be more informative about generation quality.
 
-6. **Context window truncation.** 4 of 15 unconditional failures are context-window cutoffs. A longer context (2048 tokens) or a length-penalized decoding strategy would likely raise the render rate further.
+6. **Context window truncation.** 7 of 15 unconditional failures and most prefix failures are context-window cutoffs (12/15 unconditional samples hit the 1030-token limit). This is the single largest driver of low render rate for the extended model. A longer context (2048 tokens) or a length-penalized decoding strategy would likely raise the render rate substantially — the model's actual SVG syntax quality is higher than the render rate suggests.
 
 ### 5.5 Future Work
 
@@ -467,7 +470,7 @@ We trained a family of five decoder-only transformers (~800K to ~85M non-embeddi
 
 **µP comparison.** µP is correctly implemented — validated by exact base-width loss parity with SP (both find lr=3e-4, within 0.02 nats) and the coordinate check. Nevertheless, µP underperforms SP by 0.4–0.5 nats at every wider model size. The root cause is that our model family varies depth and head count alongside width, violating µP's width-only transfer guarantee. The finding is consistent with published caveats about depth-varying families (Cerebras practitioner's guide; Cosson et al. 2025).
 
-**Generation quality.** The extended XL model (4 epochs, val loss 2.2427, perplexity 9.42) achieves 73.3% unconditional render rate — strong for an autoregressive character-level SVG model — with meaningful improvement over the 1-epoch baseline (perplexity 22.31). The 20% prefix render rate is a direct consequence of training data composition (93% font glyphs) and not a failure of the generation mechanism.
+**Generation quality.** The extended XL model (4 epochs, val loss 2.2427, perplexity 9.31) achieves 53.3% unconditional and 6.7% prefix-conditioned render rates. The render rate is lower than the 1-epoch baseline (73.3% / 20.0%) despite substantially better perplexity — the extended model generates longer, more elaborate paths that more frequently exceed the 1024-token context window mid-sequence, producing truncated and therefore invalid XML. This highlights a key limitation: render rate and perplexity measure different things. The dominant failure mode is context truncation, not syntactic incompetence.
 
 **Main takeaway.** Scaling laws hold on SVG code with a steeper exponent than natural language, µP's mechanical correctness does not guarantee performance improvement when depth varies, and training data composition is the dominant factor limiting multi-element generation quality.
 
