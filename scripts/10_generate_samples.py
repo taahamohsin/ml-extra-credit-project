@@ -4,7 +4,7 @@
 Load the best SP checkpoint and generate SVG samples.
 
 Produces two sets of samples:
-  - Unconditional: model continues from "<svg" alone (15 samples = 5 per temp)
+  - Unconditional: model continues from the full SVG header token (15 samples = 5 per temp)
   - Prefix-conditioned: 5 partial SVGs × 3 temperatures = 15 samples
 
 Sampling: top_k=50, top_p=0.95, temperatures in {0.5, 0.8, 1.0}.
@@ -34,13 +34,20 @@ from src.model import TransformerLM
 from src.tokenizer_utils import load_tokenizer, BOS_ID, EOS_ID
 
 
+# The full SVG header is a single BPE token (id=1024). Using any shorter
+# prefix (e.g. "<svg") lands the model mid-token, causing it to emit
+# attribute garbage instead of path content. This exact string must be used.
+UNCOND_PROMPT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="200px" width="200px"><path fill="none" stroke="black" stroke-width=".3" stroke-opacity="1" filling="0" d="M'
+
 # Five fixed prefixes from the blueprint (Phase 4.3).
+# Each starts with the canonical header token so the model is in-distribution.
+SVG_OPEN = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="200px" width="200px">'
 PREFIXES = [
-    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="black"/><circle cx="9" cy="10" r="1" fill="black"/>',
-    '<svg viewBox="0 0 24 24"><path d="M2 12 L12 2 L22 12',
-    '<svg viewBox="0 0 24 24"><g fill="red"><rect x="4" y="4" width="6" height="6"/>',
-    '<svg viewBox="0 0 24 24"><polygon points="12,2 15,9',
-    '<svg viewBox="0 0 24 24"><g transform="translate(12,12)"><circle r="10" fill="none" stroke="blue"/>',
+    SVG_OPEN + '<circle cx="12" cy="12" r="10" fill="none" stroke="black"/><circle cx="9" cy="10" r="1" fill="black"/>',
+    SVG_OPEN + '<path d="M2 12 L12 2 L22 12',
+    SVG_OPEN + '<g fill="red"><rect x="4" y="4" width="6" height="6"/>',
+    SVG_OPEN + '<polygon points="12,2 15,9',
+    SVG_OPEN + '<g transform="translate(12,12)"><circle r="10" fill="none" stroke="blue"/>',
 ]
 
 TEMPERATURES = [0.5, 0.8, 1.0]
@@ -93,20 +100,28 @@ def generate_one(
     max_new_tokens: int,
     device: torch.device,
     seed: int,
+    prompt_ids: list[int] | None = None,
 ) -> tuple[str, list[int]]:
-    """Generate a single completion. Returns (decoded_text, token_ids)."""
+    """Generate a single completion. Returns (decoded_text, token_ids).
+
+    If prompt_ids is given it is used directly (bypasses text encoding) —
+    use this when the prompt must land on exact token boundaries.
+    """
     torch.manual_seed(seed)
 
-    # The tokenizer's post-processor adds <BOS> and <EOS>; we want only <BOS>
-    # at the start (no <EOS> in the prompt!), so we encode without the
-    # processor and prepend BOS manually.
-    enc = tokenizer.encode(prompt)
-    ids = enc.ids
-    # Strip a trailing EOS the post-processor may have added.
-    if ids and ids[-1] == EOS_ID:
-        ids = ids[:-1]
-    if not ids or ids[0] != BOS_ID:
-        ids = [BOS_ID] + ids
+    if prompt_ids is not None:
+        ids = prompt_ids
+    else:
+        # The tokenizer's post-processor adds <BOS> and <EOS>; we want only
+        # <BOS> at the start (no <EOS> in the prompt!), so we encode without
+        # the processor and prepend BOS manually.
+        enc = tokenizer.encode(prompt)
+        ids = enc.ids
+        # Strip a trailing EOS the post-processor may have added.
+        if ids and ids[-1] == EOS_ID:
+            ids = ids[:-1]
+        if not ids or ids[0] != BOS_ID:
+            ids = [BOS_ID] + ids
 
     idx = torch.tensor([ids], dtype=torch.long, device=device)
     out = model.generate(
@@ -181,13 +196,14 @@ def main():
             text, ids = generate_one(
                 model,
                 tokenizer,
-                prompt="<svg",
+                prompt=UNCOND_PROMPT,
                 temperature=temp,
                 top_k=args.top_k,
                 top_p=args.top_p,
                 max_new_tokens=args.max_new_tokens,
                 device=device,
                 seed=seed,
+                prompt_ids=[BOS_ID, 1024],  # token 1024 = full SVG header, guaranteed boundary
             )
             fname = f"uncond_t{temp:.1f}_{k:02d}.svg"
             (uncond_dir / fname).write_text(text, encoding="utf-8")
