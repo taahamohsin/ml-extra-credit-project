@@ -334,6 +334,20 @@ Cold attention at base width meant softmax was nearly uniform. The model couldn'
 
 ---
 
+### Decision: Extended XL training — 3 additional epochs from best checkpoint
+**Date:** 2026-04-28
+**Issue:** Phase 4 spec says "train for as many tokens/epochs as feasible." After 1 epoch (1989 steps, val=3.1074), the XL model was clearly undertrained — the loss was still declining steeply at the final eval, and the Chinchilla-optimal budget for 85M params is ~1.7B tokens vs. our 130M.
+**Options considered:**
+1. Accept the 1-epoch result for Phase 4 generation
+2. Continue training from best.pt with a fresh cosine schedule for N more epochs
+3. Retrain XL from scratch with a longer schedule
+**Choice:** Option 2 — 3 additional epochs via `scripts/13_extend_xl.py`, saving to `outputs/checkpoints/xl_extended/` so the original `xl/best.pt` (used for Phase 2/3 comparisons) is untouched.
+**Reasoning:** A fresh cosine schedule over the new step budget (3 × 1989 = 5967 steps) is the cleanest way to give the optimizer a well-shaped LR trajectory for the additional compute. Continuing from the optimizer state would require resuming mid-schedule, which is complex and fragile. Saving to a separate directory means the 1-epoch checkpoint remains valid for the scaling-law comparison, while the extended checkpoint is the best-available model for generation quality.
+**Result:** Val loss dropped from 3.1074 → 2.2427 over 5967 steps (112.7 min, A100). Final val ≈ best val (2.2432 vs 2.2427), confirming no overfitting. Tokens seen: 391M total (≈3× the training set). Perplexity: e^2.2427 ≈ 9.42, vs. 22.31 after 1 epoch.
+**Impact:** Generation quality improved substantially. The extended checkpoint is used for all Phase 4 samples and evaluation metrics. The 1-epoch XL results remain in the Phase 2/3 tables for fair scaling comparison.
+
+---
+
 ### Decision: Render validation on a sample (not inline in cleaning pipeline)
 **Date:** 2026-04-19
 **Options considered:**

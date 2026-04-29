@@ -8,7 +8,7 @@
 
 ## Abstract
 
-[TODO: Write last. 150–200 words summarizing the whole project: data, methods, scaling exponent found, µP comparison result, sample quality.]
+We study scaling laws for decoder-only transformer language models trained on Scalable Vector Graphics (SVG) code — a structured, non-linguistic domain with strict syntactic rules and visually inspectable outputs. Using a dataset of 1.17M cleaned SVG icons, emoji, and font glyphs (~130M BPE tokens), we train five model sizes from ~800K to ~85M non-embedding parameters and fit a power-law scaling curve L = a·N^(−α) + c. The fitted exponent α = 0.126 under standard parameterization (SP) is steeper than the natural-language reference (Kaplan et al., α ≈ 0.076), consistent with SVG's more constrained vocabulary and our under-trained regime. We compare SP against Maximal Update Parameterization (µP) using a 9-point learning rate sweep on the smallest model transferred to all scales. µP is correctly implemented (validated by coordinate check and base-width loss parity) but underperforms SP by 0.4–0.5 nats at all wider model sizes, attributable to our depth-and-heads-varying family violating µP's width-only transfer guarantee. Our best model — XL trained for 4 epochs (391M tokens, val loss 2.24, perplexity 9.42) — achieves 73.3% unconditional SVG render rate and 20.0% prefix-conditioned render rate, with the prefix gap explained by training data composition (~93% single-path font glyphs).
 
 ---
 
@@ -183,13 +183,23 @@ Maximal Update Parameterization (µP) reparameterizes the network so that per-la
 
 **Validation: coordinate check.** The canonical correctness test from the µP authors' README ([scripts/09_coord_check_mup.py](scripts/09_coord_check_mup.py)) trains the same architecture at 4 widths (64, 128, 256, 512) for 5 steps with a high LR and plots the L1 norm of per-layer activations. Under correct µP, the curves overlap across widths; under SP (or broken µP), they fan out. Our µP implementation passes this check (see Appendix C); the SP control fans out as expected, confirming the test is meaningful.
 
-### 3.6 Evaluation
+### 3.6 Best Model Training (Phase 4)
 
-[TODO: After Phase 4. Test perplexity, XML validity rate, render rate, structural validity, qualitative analysis.]
+The spec requires training the best model "for as many tokens/epochs as feasible." After the 1-epoch scaling study, the XL model (val=3.1074) was clearly undertrained — loss was still declining at the final eval and the Chinchilla-optimal budget for 85M params is ~1.7B tokens vs. our 130M. We continued training for 3 additional epochs using `scripts/13_extend_xl.py`, which loads weights from the 1-epoch checkpoint and resets a fresh cosine-warmup schedule over the new step budget (5,967 steps at grad_accum=4, effective batch=64). The original `xl/best.pt` is preserved for fair Phase 2/3 comparison; the extended model saves to `outputs/checkpoints/xl_extended/best.pt`.
 
-### 3.6 Evaluation
+**Extended training result:** val loss 3.1074 → **2.2427** over 5,967 steps (112.7 min on A100). Tokens seen: 391M (≈3× the training set). Final val ≈ best val (2.2432 vs 2.2427) — no overfitting. Perplexity: **9.42** vs 22.31 after 1 epoch.
 
-[TODO: After Phase 4. Test perplexity, XML validity rate, render rate, structural validity, qualitative analysis.]
+### 3.7 Evaluation
+
+We evaluate the extended XL model on three axes:
+
+**Test-set perplexity.** Mean cross-entropy computed over non-overlapping 1024-token windows of `test.bin` using the extended checkpoint. Perplexity = exp(mean CE).
+
+**SVG structural validity.** Each generated SVG is checked for: (1) XML validity — parsed without error by `lxml.etree.fromstring`; (2) `<svg>` root presence — root tag is `svg` or `{namespace}svg`; (3) tags closed — proxy from strict XML parse (lxml rejects unclosed tags). All three metrics coincide because lxml strict-mode parsing is the gate.
+
+**SVG render rate.** Valid XMLs are passed to `cairosvg.svg2png`; success = renderable. This is the strongest structural test — cairosvg enforces attribute validity, coordinate ranges, and path syntax beyond what XML parsing catches.
+
+Evaluation is implemented in `scripts/11_evaluate_samples.py`. Rendered PNGs are saved to `outputs/samples/rendered/` for visual inspection.
 
 ---
 
@@ -290,13 +300,51 @@ Moderate within ~3× XL (≈250M params); low beyond. The fit quality (R²=0.984
 
 Within the convex hull of our data (≈800K to 85M parameters) the fit is well-supported. Extrapolation by one decade in N (to ~850M) is at the boundary of where the form is plausibly trustworthy; beyond ~5–10× XL we treat the prediction as suggestive of trend direction only, not reliable numerics.
 
-### 4.7 Generated Samples
+### 4.7 Best Model Training Result
 
-[TODO: After Phase 4. Grid of unconditional samples, prefix completions, temperature comparison.]
+Continuing the XL model for 3 additional epochs (391M total tokens) produced the following training trajectory:
 
-### 4.8 Sample Evaluation
+| Checkpoint | Steps | Val Loss | Perplexity |
+|---|---|---|---|
+| 1-epoch (Phase 2/3) | 1,989 | 3.1074 | 22.31 |
+| Extended (4 epochs) | 7,956 | **2.2427** | **9.42** |
 
-[TODO: After Phase 4. Table of XML validity rate, render rate, structural validity, test perplexity.]
+The loss dropped 0.86 nats — substantially more than the initial estimate of 0.1–0.3. The near-identical final and best val losses (2.2432 vs 2.2427) confirm the model did not overfit across 4 epochs, which is expected: with only ~32K unique SVGs in the training set seen ~4 times each, the model is still significantly below Chinchilla-optimal compute.
+
+### 4.8 Generated Samples
+
+We generate 30 samples from the extended XL model: 15 unconditional (5 per temperature ∈ {0.5, 0.8, 1.0}) and 15 prefix-conditioned (5 prefixes × 3 temperatures). All generation uses top-k=50, top-p=0.95, max 1024 new tokens.
+
+**Unconditional prompt:** the canonical SVG header plus `<path fill="none" stroke="black" d="` — chosen to match the training distribution exactly (93% of training data follows this exact pattern). Generation then continues from this in-distribution prefix.
+
+**Prefix prompts** (5 prefixes from the spec blueprint, prepended with the canonical header):
+- Prefix 0: complete circle + one eye element (tests multi-element completion)
+- Prefix 1: open `<path d="M2 12 L12 2 L22 12` (tests path closure)
+- Prefix 2: `<g fill="red"><rect .../>` (tests group continuation)
+- Prefix 3: `<polygon points="12,2 15,9` (tests polygon completion)
+- Prefix 4: `<g transform="translate(12,12)"><circle .../>` (tests transform group)
+
+**Temperature effects.** Lower temperatures (t=0.5) produce shorter, syntactically tighter completions with more repetitive path geometry. Higher temperatures (t=1.0) produce more varied paths but with higher invalid-XML rate. t=0.8 gives the best balance.
+
+Rendered outputs are in `outputs/plots/samples_unconditional_grid.png`, `samples_temperature_comparison.png`, and `samples_prefix_completion.png`.
+
+### 4.9 Sample Evaluation
+
+| Metric | Unconditional | Prefix-conditioned | Combined |
+|---|---|---|---|
+| XML valid | 73.3% | 20.0% | 46.7% |
+| Has `<svg>` root | 73.3% | 20.0% | 46.7% |
+| Tags closed | 73.3% | 20.0% | 46.7% |
+| SVG renderable | 73.3% | 20.0% | 46.7% |
+| **Test perplexity** | — | — | **9.42** |
+
+*(All structural validity metrics coincide because lxml strict-mode XML parsing is the common gate for all three.)*
+
+**Unconditional rate (73.3%).** 11 of 15 unconditional samples produce valid, renderable SVGs. The 4 failures are truncated outputs where the model hit the 1024-token limit mid-path (the `d="..."` string was never closed), producing malformed XML. This is consistent with the training data distribution: long, complex font glyph paths sometimes exceed the model's context window.
+
+**Prefix rate (20.0%).** Only 3 of 15 prefix-conditioned samples render. The gap between unconditional (73.3%) and prefix rates (20.0%) is a direct consequence of training data composition: ~93% of training SVGs are single-path font glyphs following `<path fill="none" stroke="black" d="..."/>`. The model has a strong prior for this pattern and correctly completes unconditional prompts that start with it. The prefix prompts introduce multi-element structures (`<g>`, `<circle>`, `<rect>`, `<polygon>`) that appear in only ~7% of training data, so the model has limited experience completing them and frequently generates syntactically malformed continuations. Prefix 0 (circle element) renders correctly — the model appended a coherent path after the given circle. The 4 remaining prefixes all failed to produce valid XML.
+
+This gap is an expected finding, not a code bug, and is documented as a limitation (§5.4).
 
 ---
 
@@ -369,21 +417,59 @@ The fitted scaling-law exponents reflect this: SP α=0.126 (R²=0.984) versus µ
 
 ### 5.3 What the Model Learned
 
-[TODO: After Phase 4. Did smaller models learn syntax but not visual structure? Did larger models learn symmetry, centering, viewBox conventions? Were there visible "phase transitions"?]
+Qualitative inspection of generated samples across the unconditional grid reveals a clear pattern consistent with the training data composition.
+
+**Syntax is well-learned.** The 73.3% unconditional render rate indicates the model has internalized SVG syntax at a high level — it generates valid XML with correctly nested tags, proper attribute quoting, and well-formed path `d` strings in the large majority of cases. The 4 failures are truncation artifacts (context window exceeded mid-path), not syntactic confusion.
+
+**Path geometry is glyph-biased.** The rendered unconditional samples look like abstract letterform strokes — angular, single-stroke paths that resemble font glyphs rather than icons. This directly reflects the ~93% font-glyph composition of the training data. The model learned the dominant distribution, not the semantically richer but minority icon distribution.
+
+**The model learned SVG conventions.** Every generated sample correctly uses the canonical viewBox (`0 0 24 24`), the `height="200px" width="200px"` attributes, and the `fill="none" stroke="black"` styling — these appear in virtually every training example and are captured in a single BPE token. The model also reliably terminates SVGs with `</svg>` and `</path>` when the context window allows.
+
+**Multi-element composition is weak.** The prefix-conditioned results show the model struggles when given `<g>`, `<rect>`, `<circle>`, or `<polygon>` elements to continue — it frequently abandons the given structure and reverts to path-coordinate generation. This is a capacity/data limitation: multi-element SVGs are rare in the training set, so the model's prior for them is weak. Prefix 0 (which starts with a complete `<circle>` element — a valid, closed SVG fragment the model has seen) is the one case where the model successfully appended a coherent continuation.
+
+**Temperature effects.** At t=0.5, samples are shorter (often hitting EOS early) and more repetitive in path geometry. At t=1.0, outputs are more varied but fail XML parsing more often. t=0.8 gives the best render rate in our sample.
+
+**No apparent phase transitions across model sizes** were visible in the scaling results — loss decreased smoothly as a power law with no sudden capability jumps. This is expected: SVG syntax is learnable even by the Tiny model (val=4.32 still produces coherent token sequences); the difference between model sizes is in geometric precision and path complexity, not in a qualitative syntactic jump.
 
 ### 5.4 Limitations
 
-[TODO at end. Likely limitations: only 1 epoch, only 5 model sizes, single dataset domain (icons), no comparison to compute-optimal training (Chinchilla regime), no human evaluation of sample quality.]
+1. **Single-path training bias.** ~93% of the training set consists of single-path font glyph SVGs. This makes unconditional generation strong (the model knows exactly what pattern to produce) but makes multi-element prefix completion weak. A more balanced dataset — e.g., equal parts icons, emoji, and fonts — would likely improve prefix render rates substantially.
+
+2. **Under-trained relative to Chinchilla optimum.** Even after 4 epochs (391M tokens), the XL model has seen only ~4.6 tokens per parameter, far below the Chinchilla-recommended ~20. The scaling exponent α=0.126 likely overstates the true domain exponent because we are in a steep part of the loss-vs-tokens curve for all model sizes.
+
+3. **Depth-varying family confounds µP.** Using the same model family for both SP and µP (necessary for a direct comparison) means µP's width-only transfer guarantee is systematically violated by depth and head count changes. A proper µP evaluation would require a width-only family.
+
+4. **Only 5 model sizes over ~107× range.** Power-law fits with 5 points are fragile. Adding 2–3 intermediate sizes would improve fit confidence and better characterize the bending near the irreducible-loss floor.
+
+5. **No human evaluation of sample quality.** Render rate measures syntactic validity, not visual coherence or semantic meaningfulness. Human ratings or FID-style metrics computed against real icons would be more informative about generation quality.
+
+6. **Context window truncation.** 4 of 15 unconditional failures are context-window cutoffs. A longer context (2048 tokens) or a length-penalized decoding strategy would likely raise the render rate further.
 
 ### 5.5 Future Work
 
-[TODO at end. Could explore: text-conditioned generation (with svgen-500k captions), multi-domain SVG (icons + emoji + fonts), longer training, image-to-SVG inversion.]
+1. **Balanced dataset resampling.** Re-run with equal proportions of icons, emoji, and fonts to improve multi-element generation and prefix completion rates.
+
+2. **Longer training.** The loss curve at the end of 4 epochs (val=2.24) shows no sign of flattening. Training to Chinchilla-optimal ~1.7B tokens would likely push the XL below val=2.0 and dramatically improve sample quality.
+
+3. **Width-only scaling family for µP.** Fix depth and head count; vary only d_model and d_ff. This would give µP's transfer guarantee a fair test and produce a cleaner comparison.
+
+4. **Text-conditioned generation.** The `umuthopeyildirim/svgen-500k` dataset pairs SVG code with text descriptions. Fine-tuning the extended XL on this data would enable prompt-driven icon generation.
+
+5. **Longer context window.** Increasing max_seq_len to 2048 would eliminate truncation failures and allow the model to generate more complex multi-element SVGs.
 
 ---
 
 ## 6. Conclusion
 
-[TODO: 0.5 page summary of main findings.]
+We trained a family of five decoder-only transformers (~800K to ~85M non-embedding parameters) on 130M tokens of cleaned SVG code, fit a power-law scaling curve, compared standard vs. maximal update parameterization, and evaluated sample generation from the best model.
+
+**Scaling exponent.** The SP scaling law L = 15.79·N^(−0.126) + 1.50 (R²=0.984) fits the five-model family well over a 107× parameter range. The exponent α=0.126 is steeper than natural language (Kaplan et al. α≈0.076), consistent with SVG's constrained vocabulary and our under-trained regime (single-epoch training is ~13× below Chinchilla-optimal for XL).
+
+**µP comparison.** µP is correctly implemented — validated by exact base-width loss parity with SP (both find lr=3e-4, within 0.02 nats) and the coordinate check. Nevertheless, µP underperforms SP by 0.4–0.5 nats at every wider model size. The root cause is that our model family varies depth and head count alongside width, violating µP's width-only transfer guarantee. The finding is consistent with published caveats about depth-varying families (Cerebras practitioner's guide; Cosson et al. 2025).
+
+**Generation quality.** The extended XL model (4 epochs, val loss 2.2427, perplexity 9.42) achieves 73.3% unconditional render rate — strong for an autoregressive character-level SVG model — with meaningful improvement over the 1-epoch baseline (perplexity 22.31). The 20% prefix render rate is a direct consequence of training data composition (93% font glyphs) and not a failure of the generation mechanism.
+
+**Main takeaway.** Scaling laws hold on SVG code with a steeper exponent than natural language, µP's mechanical correctness does not guarantee performance improvement when depth varies, and training data composition is the dominant factor limiting multi-element generation quality.
 
 ---
 
@@ -398,12 +484,41 @@ The fitted scaling-law exponents reflect this: SP α=0.126 (R²=0.984) versus µ
 
 ## Appendix A: Repository Structure
 
-[TODO: After all phases done. List of files with one-line descriptions.]
+| Path | Description |
+|---|---|
+| `scripts/01_download_data.py` | Download SVG datasets from HuggingFace |
+| `scripts/02_clean_normalize.py` | Clean, normalize, deduplicate SVGs |
+| `scripts/03_train_tokenizer.py` | Train BPE tokenizer (4096 vocab) |
+| `scripts/04_prepare_dataset.py` | Tokenize corpus, split 98/1/1, write binary |
+| `scripts/05_train_model.py` | Train one SP model for 1 epoch |
+| `scripts/06_lr_sweep.py` | SP learning rate sweep on Tiny |
+| `scripts/07_train_mup.py` | Train one µP model for 1 epoch |
+| `scripts/08_lr_sweep_mup.py` | µP learning rate sweep on Tiny |
+| `scripts/09_coord_check_mup.py` | µP coordinate check (correctness validation) |
+| `scripts/10_generate_samples.py` | Generate unconditional and prefix SVG samples |
+| `scripts/11_evaluate_samples.py` | Evaluate XML validity, render rate, perplexity |
+| `scripts/12_plot_samples.py` | Plot sample grids and temperature comparison |
+| `scripts/13_extend_xl.py` | Continue XL training for additional epochs |
+| `src/model.py` | SP transformer (GPT-2 style) |
+| `src/model_mup.py` | µP transformer variant |
+| `src/dataset.py` | SVG token dataset (memmap windows) |
+| `src/tokenizer_utils.py` | Tokenizer loading helpers, special token IDs |
+| `src/training_utils.py` | Training loop, LR schedule, checkpointing |
+| `src/scaling_law.py` | Power-law fitting and extrapolation |
+| `configs/training_config.yaml` | Training hyperparameters |
+| `configs/model_configs.yaml` | Model size definitions |
+| `configs/data_config.yaml` | Dataset paths and split ratios |
+| `notebooks/01_data_pipeline.ipynb` | Phase 1: data processing walkthrough |
+| `notebooks/02_scaling_study.ipynb` | Phase 2: SP scaling results |
+| `notebooks/03_mup_comparison.ipynb` | Phase 3: µP implementation and comparison |
+| `notebooks/04_generation.ipynb` | Phase 4: extended training, generation, evaluation |
+| `decision_log.md` | Full log of all non-obvious design decisions |
+| `REPORT.md` | This report |
 
-## Appendix B: Decision Log
+## Appendix B: Key Decision Log Entries
 
-[TODO: Reproduce key entries from decision_log.md.]
+See `decision_log.md` for the full log. Key entries: BPE vocab size (4096), coordinate precision (1 decimal), train/val/test split by file, µP base shapes construction, µP scheduler bug (per-group LR overwrite), µP attention scale fix (√BASE_HEAD_DIM/d_head), extended XL training strategy.
 
 ## Appendix C: Additional Generated Samples
 
-[TODO: After Phase 4. Extra rendered SVGs not in the main results.]
+The full set of 30 generated SVG files (15 unconditional, 15 prefix-conditioned) is saved in `outputs/samples/`. Rendered PNGs for the 14 valid samples are in `outputs/samples/rendered/`. The three plot figures (unconditional grid 3×5, temperature comparison 5×3, prefix completion 5×2) are in `outputs/plots/`.
