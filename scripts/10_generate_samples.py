@@ -34,20 +34,13 @@ from src.model import TransformerLM
 from src.tokenizer_utils import load_tokenizer, BOS_ID, EOS_ID
 
 
-# Canonical SVG header observed in training data (BPE-merged into a small
-# number of tokens). Generation prompts must start with this exact string,
-# otherwise the tokenization differs from training and the model emits
-# off-distribution garbage.
-SVG_HEADER = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="200px" width="200px">'
-
-# Five fixed prefixes from the blueprint (Phase 4.3), prepended with the
-# canonical header so the model sees a training-distribution prefix.
+# Five fixed prefixes from the blueprint (Phase 4.3).
 PREFIXES = [
-    SVG_HEADER + '<circle cx="12" cy="12" r="10" fill="none" stroke="black"/><circle cx="9" cy="10" r="1" fill="black"/>',
-    SVG_HEADER + '<path d="M2 12 L12 2 L22 12',
-    SVG_HEADER + '<g fill="red"><rect x="4" y="4" width="6" height="6"/>',
-    SVG_HEADER + '<polygon points="12,2 15,9',
-    SVG_HEADER + '<g transform="translate(12,12)"><circle r="10" fill="none" stroke="blue"/>',
+    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="black"/><circle cx="9" cy="10" r="1" fill="black"/>',
+    '<svg viewBox="0 0 24 24"><path d="M2 12 L12 2 L22 12',
+    '<svg viewBox="0 0 24 24"><g fill="red"><rect x="4" y="4" width="6" height="6"/>',
+    '<svg viewBox="0 0 24 24"><polygon points="12,2 15,9',
+    '<svg viewBox="0 0 24 24"><g transform="translate(12,12)"><circle r="10" fill="none" stroke="blue"/>',
 ]
 
 TEMPERATURES = [0.5, 0.8, 1.0]
@@ -149,11 +142,6 @@ def main():
     ap.add_argument("--top_k", type=int, default=50)
     ap.add_argument("--top_p", type=float, default=0.95)
     ap.add_argument("--seed_base", type=int, default=12345)
-    ap.add_argument("--uncond_prompt", type=str,
-                    default=SVG_HEADER,
-                    help="Prompt for unconditional generation. Should match the "
-                         "canonical SVG header seen in training so the BPE "
-                         "tokenization matches and the model is in-distribution.")
     args = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -193,7 +181,7 @@ def main():
             text, ids = generate_one(
                 model,
                 tokenizer,
-                prompt=args.uncond_prompt,
+                prompt="<svg",
                 temperature=temp,
                 top_k=args.top_k,
                 top_p=args.top_p,
