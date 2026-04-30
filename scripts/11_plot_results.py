@@ -36,12 +36,7 @@ from src.scaling_law import fit_scaling_law, plot_scaling_law, print_fit_summary
 MODEL_ORDER = ["tiny", "small", "medium", "large", "xl"]
 
 
-# ---------------------------------------------------------------------------
-# Load results
-# ---------------------------------------------------------------------------
-
 def load_results(log_dir: Path) -> dict[str, dict]:
-    """Load result_<name>.json files. Returns {name: result_dict}."""
     results = {}
     for name in MODEL_ORDER:
         p = log_dir / f"result_{name}.json"
@@ -55,7 +50,6 @@ def load_results(log_dir: Path) -> dict[str, dict]:
 
 
 def load_training_logs(log_dir: Path) -> dict[str, list[dict]]:
-    """Load training_<name>.csv files. Returns {name: [row, ...]}."""
     import csv
     logs = {}
     for name in MODEL_ORDER:
@@ -75,10 +69,6 @@ def load_lr_sweep(log_dir: Path) -> dict | None:
     print("WARNING: lr_sweep_sp.json not found — skipping LR sweep plot.")
     return None
 
-
-# ---------------------------------------------------------------------------
-# Plot 1: Scaling law
-# ---------------------------------------------------------------------------
 
 def plot_scaling(results: dict, plots_dir: Path) -> None:
     if len(results) < 2:
@@ -106,14 +96,12 @@ def plot_scaling(results: dict, plots_dir: Path) -> None:
         label="SP",
     )
 
-    # Extrapolation to 10× XL
     max_n = max(param_counts)
     p_10x = predict(fit, max_n * 10)
     print(f"\nExtrapolation (10× XL ≈ {max_n*10/1e6:.0f}M params):")
     print(f"  Predicted L = {p_10x['L_pred']:.4f}  "
           f"95% CI: [{p_10x['L_lower']:.4f}, {p_10x['L_upper']:.4f}]")
 
-    # Save fit to JSON
     fit_out = {
         "parameterization": "SP",
         "models": names,
@@ -128,10 +116,6 @@ def plot_scaling(results: dict, plots_dir: Path) -> None:
     with open(plots_dir.parent / "logs" / "scaling_fit_sp.json", "w") as f:
         json.dump(fit_out, f, indent=2)
 
-
-# ---------------------------------------------------------------------------
-# Plot 2: Training curves
-# ---------------------------------------------------------------------------
 
 def plot_training_curves(logs: dict, plots_dir: Path) -> None:
     if not logs:
@@ -174,10 +158,6 @@ def plot_training_curves(logs: dict, plots_dir: Path) -> None:
         print(f"WARNING: Could not generate training curves: {e}")
 
 
-# ---------------------------------------------------------------------------
-# Plot 3: LR sweep
-# ---------------------------------------------------------------------------
-
 def plot_lr_sweep_from_json(sweep: dict, plots_dir: Path) -> None:
     if sweep is None:
         return
@@ -216,10 +196,6 @@ def plot_lr_sweep_from_json(sweep: dict, plots_dir: Path) -> None:
         print(f"WARNING: Could not generate LR sweep plot: {e}")
 
 
-# ---------------------------------------------------------------------------
-# Throughput table
-# ---------------------------------------------------------------------------
-
 def print_throughput_table(results: dict, logs: dict, log_dir: Path) -> None:
     import csv
 
@@ -254,10 +230,6 @@ def print_throughput_table(results: dict, logs: dict, log_dir: Path) -> None:
             writer.writerows(rows)
         print(f"Throughput table saved to {out}")
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
     log_dir   = REPO_ROOT / "outputs" / "logs"

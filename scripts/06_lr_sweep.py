@@ -32,10 +32,6 @@ from src.training_utils import build_optimizer, evaluate, get_lr
 from torch.utils.data import DataLoader
 
 
-# ---------------------------------------------------------------------------
-# Single LR run
-# ---------------------------------------------------------------------------
-
 def run_one_lr(
     lr: float,
     max_steps: int,
@@ -46,14 +42,12 @@ def run_one_lr(
     use_bf16: bool,
     warmup_steps: int,
 ) -> dict:
-    """Train Tiny from scratch at a single LR, return final val loss."""
     model = build_model("tiny").to(device)
     if hasattr(torch, "compile"):
         model = torch.compile(model)
 
     optimizer = build_optimizer(model, lr=lr)
 
-    # Fixed-seed val dataset for reproducible comparison
     train_ds, val_ds = make_datasets(
         binary_dir,
         seq_len=seq_len,
@@ -96,8 +90,6 @@ def run_one_lr(
 
     val_loss = evaluate(model, val_loader, device, use_bf16=use_bf16, max_batches=50)
     wall_sec = time.time() - t0
-
-    # Detect divergence
     diverged = val_loss > 10.0 or not np.isfinite(val_loss)
 
     return {
@@ -108,10 +100,6 @@ def run_one_lr(
         "max_steps": max_steps,
     }
 
-
-# ---------------------------------------------------------------------------
-# Plot
-# ---------------------------------------------------------------------------
 
 def plot_lr_sweep(results: list[dict], save_path: Path) -> None:
     try:
@@ -146,10 +134,6 @@ def plot_lr_sweep(results: list[dict], save_path: Path) -> None:
     except Exception as e:
         print(f"WARNING: Could not generate LR sweep plot: {e}")
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser()
@@ -200,14 +184,12 @@ def main():
         status = "DIVERGED" if result["diverged"] else f"val={result['val_loss']:.4f}"
         print(f"{status}  ({result['wall_sec']:.0f}s)")
 
-    # Sort by LR for clean output
     results.sort(key=lambda r: r["lr"])
 
     best = min(results, key=lambda r: r["val_loss"])
     print(f"\nBest LR: {best['lr']:.1e}  →  val_loss={best['val_loss']:.4f}")
     print(f"Set `learning_rate: {best['lr']:.1e}` in configs/training_config.yaml before running script 05.\n")
 
-    # Save JSON
     sweep_result = {
         "parameterization": "SP",
         "model":            "tiny",
@@ -221,10 +203,8 @@ def main():
         json.dump(sweep_result, f, indent=2)
     print(f"Results saved to {out_path}")
 
-    # Plot
     plot_lr_sweep(results, plots_dir / "lr_sweep_sp.png")
 
-    # Print table
     print(f"\n{'LR':>12} {'Val loss':>12} {'Diverged':>10}")
     print("-" * 38)
     for r in results:

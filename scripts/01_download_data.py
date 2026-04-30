@@ -1,15 +1,10 @@
 """
 01_download_data.py
 -------------------
-Download SVG datasets from HuggingFace and save the raw SVG strings to disk.
-
-Strategy (from Section 4.1 of the blueprint):
-  1. Load starvector/svg-icons-simple (~89k files) — primary dataset
-  2. If after tokenization we are under 100M tokens, add svg-emoji-simple
-  3. If still under, subsample svg-fonts-simple until we hit the target
-
-This script only handles downloading and saving raw SVG text — no cleaning.
-Run 02_clean_normalize.py next.
+Download SVG datasets from HuggingFace and save raw SVG strings to disk.
+Loads icons-simple first; adds emoji-simple and a subsampled slice of
+fonts-simple until the ~100M token target is met.
+No cleaning — run 02_clean_normalize.py next.
 
 Usage:
     python scripts/01_download_data.py [--config configs/data_config.yaml]
@@ -25,14 +20,9 @@ import yaml
 from datasets import load_dataset
 from tqdm import tqdm
 
-# Allow importing from src/ regardless of working directory
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def debug_dataset_structure(ds, dataset_name: str) -> None:
     """Print column names and first example so we can see the actual schema."""
@@ -45,11 +35,7 @@ def debug_dataset_structure(ds, dataset_name: str) -> None:
 
 
 def get_svg_field(example: dict) -> str | None:
-    """
-    Extract the SVG string from a dataset example.
-    Tries common column names used across StarVector datasets,
-    including both lowercase and title-case variants.
-    """
+    """Try common column name variants used across StarVector datasets."""
     for key in ("Svg", "svg", "SVG", "image", "svg_code", "text"):
         val = example.get(key)
         if isinstance(val, str) and val.strip():
@@ -62,7 +48,6 @@ def save_raw_svgs(
     output_path: Path,
     source_name: str,
 ) -> None:
-    """Save a list of SVG strings as a JSON lines file (.jsonl)."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         for svg in svgs:
@@ -76,7 +61,6 @@ def load_and_collect(
     max_samples: int | None = None,
     subsample_fraction: float | None = None,
 ) -> list[str]:
-    """Load a HuggingFace dataset and collect raw SVG strings."""
     print(f"\nLoading {dataset_name} (split={split}) ...")
     try:
         ds = load_dataset(dataset_name, split=split)
@@ -87,7 +71,6 @@ def load_and_collect(
     print(f"  Raw dataset size: {len(ds):,} examples")
     debug_dataset_structure(ds, dataset_name)
 
-    # Optional subsampling
     if subsample_fraction is not None and subsample_fraction < 1.0:
         n = int(len(ds) * subsample_fraction)
         ds = ds.shuffle(seed=42).select(range(n))
@@ -113,10 +96,6 @@ def load_and_collect(
     return svgs
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main(config_path: str = "configs/data_config.yaml", fonts_only: bool = False) -> None:
     config_file = REPO_ROOT / config_path
     with open(config_file) as f:
@@ -132,17 +111,13 @@ def main(config_path: str = "configs/data_config.yaml", fonts_only: bool = False
                           # but fonts dominate supplements and average ~99 tok/SVG
 
     if fonts_only:
-        # -----------------------------------------------------------------------
-        # Fonts-only mode: re-download just fonts-simple with updated fraction,
-        # read existing manifest to preserve icons/emoji entries.
-        # -----------------------------------------------------------------------
+        # Re-download fonts-simple with updated fraction; preserve icons/emoji from the existing manifest.
         manifest_path = raw_dir / "download_manifest.json"
         if manifest_path.exists():
             with open(manifest_path) as f:
                 manifest = json.load(f)
             all_files = manifest["downloaded_files"]
             estimated_tokens = manifest.get("estimated_tokens_rough", 0)
-            # Remove stale fonts entry so we recount cleanly
             all_files = [f for f in all_files if "fonts" not in f]
             estimated_tokens -= manifest.get("fonts_tokens", 0)
         else:
@@ -176,9 +151,6 @@ def main(config_path: str = "configs/data_config.yaml", fonts_only: bool = False
         print(f"Files in manifest: {all_files}")
         return
 
-    # -----------------------------------------------------------------------
-    # 1. Primary dataset: svg-icons-simple
-    # -----------------------------------------------------------------------
     primary_name = datasets_cfg["primary"]
     icons_svgs = load_and_collect(primary_name)
     save_raw_svgs(icons_svgs, raw_dir / "icons_simple.jsonl", source_name="icons-simple")
@@ -188,9 +160,6 @@ def main(config_path: str = "configs/data_config.yaml", fonts_only: bool = False
 
     all_files = ["icons_simple.jsonl"]
 
-    # -----------------------------------------------------------------------
-    # 2. Supplementary: svg-emoji-simple (if needed)
-    # -----------------------------------------------------------------------
     supplementary = datasets_cfg.get("supplementary", [])
     remaining_datasets = list(supplementary)
 
@@ -203,9 +172,6 @@ def main(config_path: str = "configs/data_config.yaml", fonts_only: bool = False
             estimated_tokens += len(emoji_svgs) * TOKENS_PER_SVG
             print(f"Updated estimated tokens (after emoji): {estimated_tokens:,}")
 
-    # -----------------------------------------------------------------------
-    # 3. Supplementary: svg-fonts-simple (subsampled, if still needed)
-    # -----------------------------------------------------------------------
     fonts_tokens = 0
     if estimated_tokens < target_tokens and remaining_datasets:
         fonts_name = remaining_datasets.pop(0)
@@ -218,9 +184,6 @@ def main(config_path: str = "configs/data_config.yaml", fonts_only: bool = False
             estimated_tokens += fonts_tokens
             print(f"Updated estimated tokens (after fonts): {estimated_tokens:,}")
 
-    # -----------------------------------------------------------------------
-    # 4. Save a manifest of downloaded files
-    # -----------------------------------------------------------------------
     manifest = {
         "downloaded_files": all_files,
         "fonts_tokens": fonts_tokens,
@@ -233,13 +196,10 @@ def main(config_path: str = "configs/data_config.yaml", fonts_only: bool = False
         json.dump(manifest, f, indent=2)
     print(f"\nManifest saved to {manifest_path}")
 
-    print("\n" + "=" * 60)
-    print("Phase 1 Step 1 COMPLETE — data downloaded.")
-    print(f"Raw data directory: {raw_dir}")
+    print(f"\nRaw data dir: {raw_dir}")
     print(f"Files: {all_files}")
     print(f"Estimated tokens (rough): {estimated_tokens:,}")
     print("Next: run scripts/02_clean_normalize.py")
-    print("=" * 60)
 
 
 if __name__ == "__main__":

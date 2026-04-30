@@ -1,23 +1,9 @@
 """
 02_clean_normalize.py
 ---------------------
-Read raw SVG JSONL files produced by 01_download_data.py, run the full
-cleaning pipeline (see svg_utils.py), and save cleaned SVGs to disk.
-
-Cleaning pipeline (applied to every SVG in order):
-  1. Strip XML comments
-  2. Strip <?xml?> processing instructions
-  3. Strip <metadata>, <desc>, <title> blocks
-  4. Extract <svg>...</svg> (discard anything outside)
-  5. Round floats to 1 decimal place
-  6. Collapse whitespace
-  7. Validate as valid XML (lxml strict)
-  8. Length filter (discard if < 50 characters)
-  9. MD5 deduplication
-
-Outputs:
-  - outputs/data/cleaned/cleaned.jsonl  — one cleaned SVG per line
-  - outputs/data/dataset_stats.json     — cleaning statistics
+Read raw JSONL files from 01_download_data.py, clean each SVG (strip
+comments/PI/metadata, extract <svg> root, round floats, validate XML,
+length-filter, deduplicate), and write cleaned.jsonl.
 
 Usage:
     python scripts/02_clean_normalize.py [--config configs/data_config.yaml]
@@ -38,10 +24,6 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.svg_utils import clean_svg, md5_hash, is_valid_xml, is_renderable
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def iter_jsonl(path: Path):
     """Yield (svg_string, source_name) from a .jsonl file."""
     with open(path, encoding="utf-8") as f:
@@ -57,11 +39,7 @@ def iter_jsonl(path: Path):
 
 
 def debug_xml_validation() -> None:
-    """
-    Verify lxml is doing real XML parsing by running known-good and
-    known-bad SVGs through is_valid_xml. Runs unconditionally at startup,
-    before any file processing.
-    """
+    """Smoke-test is_valid_xml with known-good and known-bad inputs before touching any files."""
     print("\n[DEBUG] XML validation spot-check (runs before any file processing):")
     cases = [
         (True,  "good SVG",           '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>'),
@@ -84,12 +62,7 @@ def debug_xml_validation() -> None:
 
 
 def debug_sample(raw_file: Path, min_length_chars: int, sample_size: int = 500) -> None:
-    """
-    Print diagnostic information about a raw SVG file:
-      1. Shortest SVG lengths (to check if any approach the threshold)
-      2. Duplicate rate (MD5 on raw strings before cleaning)
-      3. Three SVGs nearest to the length threshold
-    """
+    """Print length distribution, duplicate rate, and before/after cleaning for a raw file sample."""
     print(f"\n[DEBUG] Sampling first {sample_size} SVGs from {raw_file.name} ...")
 
     svgs = []
@@ -102,7 +75,6 @@ def debug_sample(raw_file: Path, min_length_chars: int, sample_size: int = 500) 
         print("[DEBUG] No SVGs loaded — file may be empty or unreadable.")
         return
 
-    # 1. Length distribution
     lengths = sorted(len(s) for s in svgs)
     print("\n[DEBUG] Character lengths (raw, before cleaning):")
     print(f"  min={lengths[0]}, p5={lengths[len(lengths)//20]}, "
@@ -110,21 +82,18 @@ def debug_sample(raw_file: Path, min_length_chars: int, sample_size: int = 500) 
     print(f"  SVGs below {min_length_chars} chars: "
           f"{sum(1 for n in lengths if n < min_length_chars)} / {len(lengths)}")
 
-    # 2. Duplicate check (on raw strings)
     raw_hashes = [hashlib.md5(s.encode()).hexdigest() for s in svgs]
     n_unique = len(set(raw_hashes))
     print("\n[DEBUG] Deduplication (raw strings, before cleaning):")
     print(f"  Unique MD5 hashes: {n_unique} / {len(svgs)} "
           f"({100 * (len(svgs) - n_unique) / len(svgs):.1f}% duplicates)")
 
-    # 3. Three SVGs closest to the length threshold
     by_dist = sorted(svgs, key=lambda s: abs(len(s) - min_length_chars))
     print(f"\n[DEBUG] 3 SVGs nearest to length threshold ({min_length_chars} chars):")
     for i, s in enumerate(by_dist[:3]):
         print(f"  Example {i+1}: raw_len={len(s)}")
         print(f"    {repr(s[:200])}")
 
-    # 4. Before/after cleaning on the first SVG — verify transformations are applied
     print("\n[DEBUG] Before/after cleaning (first SVG):")
     raw = svgs[0]
     cleaned, reason = clean_svg(raw, decimal_places=1, min_length_chars=min_length_chars)
@@ -132,7 +101,6 @@ def debug_sample(raw_file: Path, min_length_chars: int, sample_size: int = 500) 
     print(f"  Raw   ({len(raw):>6} chars): {raw[:300]!r}")
     print(f"  Clean ({len(cleaned) if cleaned else 0:>6} chars): {(cleaned or '')[:300]!r}")
 
-    # Show float rounding by applying _round_floats directly to a short snippet
     import re
     from src.svg_utils import _round_floats
     floats_raw = re.findall(r"-?\d+\.\d+", raw)
@@ -148,25 +116,14 @@ def debug_sample(raw_file: Path, min_length_chars: int, sample_size: int = 500) 
                 break
 
 
-# ---------------------------------------------------------------------------
-# Render validation
-# ---------------------------------------------------------------------------
-
 def render_validation_sample(
     cleaned_path: Path,
     sample_size: int = 1000,
     seed: int = 42,
 ) -> dict:
-    """
-    Load a random sample of cleaned SVGs and test whether cairosvg can render
-    each one. Does NOT re-run the cleaning pipeline.
-
-    Returns a dict with render success stats, suitable for merging into
-    dataset_stats.json.
-    """
+    """Render a random sample of cleaned SVGs with cairosvg; returns stats dict."""
     import random
 
-    # Load all cleaned SVGs into a list (just the strings — no heavy data)
     svgs = []
     with open(cleaned_path, encoding="utf-8") as f:
         for line in f:
@@ -212,10 +169,6 @@ def render_validation_sample(
     }
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main(config_path: str = "configs/data_config.yaml") -> None:
     config_file = REPO_ROOT / config_path
     with open(config_file) as f:
@@ -230,14 +183,12 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     stats_file = REPO_ROOT / paths_cfg["stats_file"]
     stats_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Load download manifest to know which files to process
     manifest_path = raw_dir / "download_manifest.json"
     if manifest_path.exists():
         with open(manifest_path) as f:
             manifest = json.load(f)
         raw_files = [raw_dir / fname for fname in manifest["downloaded_files"]]
     else:
-        # Fallback: process all .jsonl files in raw_dir
         raw_files = sorted(raw_dir.glob("*.jsonl"))
         print(f"WARNING: No manifest found. Processing all JSONL files in {raw_dir}")
 
@@ -249,12 +200,8 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     for f in raw_files:
         print(f"  {f}")
 
-    # Run XML validation spot-check immediately — before touching any files
     debug_xml_validation()
 
-    # -----------------------------------------------------------------------
-    # Cleaning loop
-    # -----------------------------------------------------------------------
     cleaned_path = cleaned_dir / "cleaned.jsonl"
 
     aggregate_stats = {
@@ -305,36 +252,26 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
             print(f"  {raw_file.name}: {file_in:,} in → {file_ok:,} kept "
                   f"({file_in - file_ok:,} removed)")
 
-    # -----------------------------------------------------------------------
-    # Summary
-    # -----------------------------------------------------------------------
     total_in = aggregate_stats["total_input"]
     total_out = aggregate_stats["total_output"]
     removed = aggregate_stats["removed"]
 
-    print("\n" + "=" * 60)
-    print("CLEANING SUMMARY")
-    print("=" * 60)
-    print(f"Total input SVGs:       {total_in:>10,}")
-    print(f"Total kept SVGs:        {total_out:>10,}")
-    print(f"Total removed:          {total_in - total_out:>10,}  ({100*(total_in-total_out)/max(total_in,1):.1f}%)")
-    print(f"  - No <svg> root:      {removed.get('no_svg_root', 0):>10,}")
-    print(f"  - Invalid XML:        {removed.get('invalid_xml', 0):>10,}")
-    print(f"  - Too short (<{cleaning_cfg['min_length_chars']} chars): {removed.get('too_short', 0):>10,}")
-    print(f"  - Duplicates:         {removed.get('duplicate', 0):>10,}")
+    print(f"\nTotal input:  {total_in:>10,}")
+    print(f"Kept:         {total_out:>10,}")
+    print(f"Removed:      {total_in - total_out:>10,}  ({100*(total_in-total_out)/max(total_in,1):.1f}%)")
+    print(f"  no_svg_root:  {removed.get('no_svg_root', 0):,}")
+    print(f"  invalid_xml:  {removed.get('invalid_xml', 0):,}")
+    print(f"  too_short:    {removed.get('too_short', 0):,}")
+    print(f"  duplicate:    {removed.get('duplicate', 0):,}")
     print(f"\nCleaned output: {cleaned_path}")
 
-    # Render validation on a random sample of the cleaned output
     render_stats = render_validation_sample(cleaned_path, sample_size=1000)
     aggregate_stats.update(render_stats)
 
-    # Save stats JSON
     with open(stats_file, "w") as f:
         json.dump(aggregate_stats, f, indent=2)
     print(f"Stats saved to: {stats_file}")
-
     print("\nNext: run scripts/03_train_tokenizer.py")
-    print("=" * 60)
 
 
 if __name__ == "__main__":

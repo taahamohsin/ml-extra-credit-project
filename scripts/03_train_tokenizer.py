@@ -1,18 +1,8 @@
 """
 03_train_tokenizer.py
 ---------------------
-Train a BPE tokenizer on the cleaned SVG corpus and save it.
-
-Design choices (see Section 4.3 of the blueprint):
-  - BPE with ByteLevel pre-tokenizer (handles all Unicode)
-  - Vocab size = 4096
-  - Special tokens: <PAD> (0), <BOS> (1), <EOS> (2), <UNK> (3)
-  - Post-processor wraps every sequence with BOS/EOS automatically
-
-Outputs:
-  - outputs/tokenizer/tokenizer.json
-  - outputs/tokenizer/tokenizer_stats.json  (top tokens, frequencies)
-  - outputs/plots/token_freq_distribution.png
+Train a BPE tokenizer (vocab=4096, ByteLevel pre-tokenizer) on the cleaned
+SVG corpus and save it. Special tokens: <PAD>=0, <BOS>=1, <EOS>=2, <UNK>=3.
 
 Usage:
     python scripts/03_train_tokenizer.py [--config configs/data_config.yaml]
@@ -38,12 +28,7 @@ from src.tokenizer_utils import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def load_cleaned_svgs(cleaned_path: Path, max_samples: int | None = None, sample_size: int | None = None, seed: int = 42) -> list[str]:
-    """Load SVG strings from the cleaned.jsonl file."""
     svgs = []
     with open(cleaned_path, encoding="utf-8") as f:
         for line in tqdm(f, desc="Loading cleaned SVGs"):
@@ -76,18 +61,15 @@ def plot_token_frequencies(
     save_path: Path,
     top_n: int = 200,
 ) -> None:
-    """Plot Zipf-like token frequency distribution."""
     try:
         import matplotlib.pyplot as plt
         import numpy as np
 
-        # Sort by frequency descending
         sorted_freqs = sorted(freq_dict.values(), reverse=True)
         ranks = list(range(1, len(sorted_freqs) + 1))
 
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-        # Left: Zipf plot (log-log)
         ax = axes[0]
         ax.loglog(ranks[:top_n], sorted_freqs[:top_n], "b.", markersize=3)
         ax.set_xlabel("Token rank (log scale)")
@@ -95,12 +77,10 @@ def plot_token_frequencies(
         ax.set_title(f"Token Frequency Distribution (Zipf plot, top {top_n})")
         ax.grid(True, alpha=0.3)
 
-        # Right: Top-30 tokens bar chart
         ax2 = axes[1]
         vocab = tokenizer.get_vocab()
         id_to_tok = {v: k for k, v in vocab.items()}
         top_30 = sorted(freq_dict.items(), key=lambda x: x[1], reverse=True)[:30]
-        # Skip special tokens in bar chart
         special_ids = set(range(len(SPECIAL_TOKENS)))
         top_30 = [(id_to_tok.get(tid, f"id={tid}"), cnt)
                   for tid, cnt in top_30 if tid not in special_ids][:30]
@@ -127,7 +107,6 @@ def plot_sequence_length_histogram(
     lengths: list[int],
     save_path: Path,
 ) -> None:
-    """Plot a histogram of token lengths per SVG."""
     try:
         import matplotlib.pyplot as plt
         import numpy as np
@@ -160,10 +139,6 @@ def plot_sequence_length_histogram(
         print(f"WARNING: Could not generate sequence length histogram: {e}")
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main(config_path: str = "configs/data_config.yaml") -> None:
     config_file = REPO_ROOT / config_path
     with open(config_file) as f:
@@ -174,12 +149,11 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     cleaning_cfg = cfg["cleaning"]
 
     cleaned_path = REPO_ROOT / paths_cfg["cleaned_data_dir"] / "cleaned.jsonl"
-    tokenizer_dir = REPO_ROOT / paths_cfg["tokenizer_dir"]   # may be a Drive symlink
+    tokenizer_dir = REPO_ROOT / paths_cfg["tokenizer_dir"]
     plots_dir = REPO_ROOT / paths_cfg["plots_dir"]
     stats_file = REPO_ROOT / paths_cfg["stats_file"]
 
-    # Train and save to local disk first, then copy to Drive at the end.
-    # This avoids Drive write-quota errors during the tokenizer save step.
+    # Write to /tmp first to avoid Drive write-quota errors on large saves.
     local_tokenizer_dir = Path("/tmp/tokenizer_local")
     local_tokenizer_dir.mkdir(parents=True, exist_ok=True)
 
@@ -187,17 +161,10 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
         print(f"ERROR: {cleaned_path} not found. Run 02_clean_normalize.py first.")
         sys.exit(1)
 
-    # -----------------------------------------------------------------------
-    # 1. Load cleaned SVGs (subsample for tokenizer training to save RAM)
-    # -----------------------------------------------------------------------
     sample_size = tok_cfg.get("sample_size", None)
     svgs = load_cleaned_svgs(cleaned_path, sample_size=sample_size, seed=cfg.get("seed", 42))
 
-    # -----------------------------------------------------------------------
-    # 2. Train tokenizer — save to local /tmp first
-    # -----------------------------------------------------------------------
     print(f"\nTraining BPE tokenizer (vocab_size={tok_cfg['vocab_size']}) ...")
-    print(f"  Saving locally to {local_tokenizer_dir} (Drive copy happens after stats)")
     tokenizer = train_tokenizer(
         svg_texts=svgs,
         vocab_size=tok_cfg["vocab_size"],
@@ -207,9 +174,6 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     actual_vocab_size = tokenizer.get_vocab_size()
     print(f"Actual vocabulary size: {actual_vocab_size:,}")
 
-    # -----------------------------------------------------------------------
-    # 3. Show example tokenizations
-    # -----------------------------------------------------------------------
     print("\n--- Example tokenizations ---")
     examples = svgs[:3] if len(svgs) >= 3 else svgs
     for i, svg in enumerate(examples):
@@ -220,9 +184,6 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
         tokens = [tokenizer.id_to_token(tid) for tid in enc.ids[:20]]
         print(f"  Tokens (first 20):     {tokens}")
 
-    # -----------------------------------------------------------------------
-    # 4. Compute token-length statistics
-    # -----------------------------------------------------------------------
     print("\nComputing token length statistics (this may take a few minutes) ...")
     length_stats = compute_tokenizer_stats(
         tokenizer, svgs, max_token_length=cleaning_cfg["max_token_length"]
@@ -231,13 +192,9 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
     for k, v in length_stats.items():
         print(f"  {k:30s}: {v}")
 
-    # Collect individual lengths for histogram
     from src.tokenizer_utils import encode as tok_encode
     lengths = [len(tok_encode(tokenizer, svg)) for svg in tqdm(svgs, desc="  Computing lengths")]
 
-    # -----------------------------------------------------------------------
-    # 5. Compute token frequencies
-    # -----------------------------------------------------------------------
     print("\nComputing token frequencies ...")
     freq_dict = compute_token_frequencies(tokenizer, svgs)
     print(f"  Unique tokens seen: {len(freq_dict):,} / {actual_vocab_size:,}")
@@ -252,9 +209,6 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
         tok_str = id_to_tok.get(tid, f"<id={tid}>")
         print(f"  {tok_str:<25} {tid:>6} {cnt:>12,}")
 
-    # -----------------------------------------------------------------------
-    # 6. Save tokenizer stats — local first
-    # -----------------------------------------------------------------------
     tokenizer_stats = {
         "vocab_size": actual_vocab_size,
         "num_svgs_trained_on": len(svgs),
@@ -269,7 +223,6 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
         json.dump(tokenizer_stats, f, indent=2)
     print(f"\nTokenizer stats saved locally to {tok_stats_path}")
 
-    # Merge into main stats file if it exists
     if stats_file.exists():
         with open(stats_file) as f:
             main_stats = json.load(f)
@@ -277,9 +230,6 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
         with open(stats_file, "w") as f:
             json.dump(main_stats, f, indent=2)
 
-    # -----------------------------------------------------------------------
-    # 7. Generate plots — local disk
-    # -----------------------------------------------------------------------
     local_plots_dir = Path("/tmp/plots_local")
     local_plots_dir.mkdir(parents=True, exist_ok=True)
     print("\nGenerating plots ...")
@@ -292,9 +242,6 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
         save_path=local_plots_dir / "sequence_length_histogram.png",
     )
 
-    # -----------------------------------------------------------------------
-    # 8. Copy all outputs from local disk to Drive
-    # -----------------------------------------------------------------------
     import shutil
     print("\nCopying outputs to Drive ...")
 
@@ -311,19 +258,13 @@ def main(config_path: str = "configs/data_config.yaml") -> None:
         shutil.copy2(src, dst)
         print(f"  {src.name}  ({src.stat().st_size / 1e3:.1f} KB) → {dst}")
 
-    # -----------------------------------------------------------------------
-    # 9. Summary
-    # -----------------------------------------------------------------------
-    print("\n" + "=" * 60)
-    print("Phase 1 Step 3 COMPLETE — tokenizer trained.")
-    print(f"Vocabulary size:    {actual_vocab_size:,}")
+    print(f"\nVocabulary size:    {actual_vocab_size:,}")
     print(f"Median seq length:  {length_stats['median']:.0f} tokens")
     print(f"P99 seq length:     {length_stats['p99']:.0f} tokens")
     print(f"SVGs > 1024 tokens: {length_stats['exceeds_max_length']:,} "
           f"({length_stats['exceeds_max_length_pct']:.1f}%)")
     print(f"Tokenizer dir:      {tokenizer_dir}")
     print("\nNext: run scripts/04_prepare_dataset.py")
-    print("=" * 60)
 
 
 if __name__ == "__main__":

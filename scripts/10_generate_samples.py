@@ -53,11 +53,6 @@ PREFIXES = [
 TEMPERATURES = [0.5, 0.8, 1.0]
 
 
-# ---------------------------------------------------------------------------
-# Model loading
-# ---------------------------------------------------------------------------
-
-
 def load_model_from_checkpoint(ckpt_path: Path, device: torch.device) -> TransformerLM:
     """Build a TransformerLM from a checkpoint and load its weights."""
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
@@ -82,11 +77,6 @@ def load_model_from_checkpoint(ckpt_path: Path, device: torch.device) -> Transfo
     print(f"  Step:           {step}")
     print(f"  Best val loss:  {best:.4f}")
     return model
-
-
-# ---------------------------------------------------------------------------
-# Generation helper
-# ---------------------------------------------------------------------------
 
 
 @torch.no_grad()
@@ -137,11 +127,6 @@ def generate_one(
     return text, out_ids
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", type=str, default="outputs/checkpoints/xl/best.pt")
@@ -185,8 +170,6 @@ def main():
         "prefix": [],
     }
 
-    # ---------- Unconditional ----------
-    # Distribute n_uncond as evenly as possible across temperatures.
     n_per_temp = max(1, args.n_uncond // len(TEMPERATURES))
     print(f"\n=== Unconditional generation ({n_per_temp} per temperature) ===")
     sample_idx = 0
@@ -221,7 +204,6 @@ def main():
             )
             sample_idx += 1
 
-    # ---------- Prefix-conditioned ----------
     print(
         f"\n=== Prefix-conditioned generation "
         f"({len(PREFIXES)} prefixes × {len(TEMPERATURES)} temps) ==="
@@ -256,7 +238,6 @@ def main():
             print(f"  prefix {p_idx} t={temp}  tokens={len(ids):>4}  {fname}")
             sample_idx += 1
 
-    # Save manifest
     manifest_path = out_root / "manifest.json"
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)

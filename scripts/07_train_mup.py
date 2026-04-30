@@ -63,9 +63,6 @@ def main():
     parser.add_argument("--data_config",     default="configs/data_config.yaml")
     args = parser.parse_args()
 
-    # -----------------------------------------------------------------------
-    # Load configs
-    # -----------------------------------------------------------------------
     with open(REPO_ROOT / args.model_config) as f:
         mcfg = yaml.safe_load(f)
     with open(REPO_ROOT / args.training_config) as f:
@@ -93,9 +90,6 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    # -----------------------------------------------------------------------
-    # Build µP model
-    # -----------------------------------------------------------------------
     model_name = args.model_name
     model = build_mup_model(model_name)
     model = model.to(device)
@@ -107,9 +101,6 @@ def main():
     n_params = (model._orig_mod if hasattr(model, "_orig_mod") else model).count_parameters()
     print(f"µP Model: {model_name}  |  Non-emb params: {n_params:,}")
 
-    # -----------------------------------------------------------------------
-    # Datasets + DataLoaders
-    # -----------------------------------------------------------------------
     n_train_tokens  = count_train_tokens(binary_dir)
     effective_batch = args.batch_size or tcfg["batch_size"]
     grad_accum      = args.grad_accum or tcfg.get("grad_accum_steps", 1)
@@ -131,9 +122,6 @@ def main():
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
                               num_workers=2, pin_memory=(device.type == "cuda"))
 
-    # -----------------------------------------------------------------------
-    # MuAdamW optimizer
-    # -----------------------------------------------------------------------
     peak_lr   = args.lr or tcfg["learning_rate"]
     raw_model = model._orig_mod if hasattr(model, "_orig_mod") else model
     optimizer = build_mup_optimizer(
@@ -143,12 +131,8 @@ def main():
         weight_decay=tcfg["optimizer"]["weight_decay"],
     )
 
-    # Resume guarded earlier; resume_from stays None for µP runs.
     resume_from = None
 
-    # -----------------------------------------------------------------------
-    # Train
-    # -----------------------------------------------------------------------
     train_cfg = {
         "model_name":          f"mup_{model_name}",
         "learning_rate":       peak_lr,
@@ -191,17 +175,10 @@ def main():
 
     wall_min = (time.time() - t_start) / 60
 
-    # -----------------------------------------------------------------------
-    # Save result JSON
-    # -----------------------------------------------------------------------
     result = {
         "model_name":       model_name,
         "parameterization": "mup",
         "n_params":         n_params,
-        # final_val_loss is val loss after the last eval (= 1 epoch). The spec
-        # asks for "validation loss after 1 epoch" so this is the canonical
-        # number for the scaling-law plot. best_val_loss is also reported for
-        # diagnostic purposes — useful for spotting late-training divergence.
         "final_val_loss":   summary["final_val_loss"],
         "best_val_loss":    summary["best_val_loss"],
         "tokens_seen":      summary["tokens_seen"],

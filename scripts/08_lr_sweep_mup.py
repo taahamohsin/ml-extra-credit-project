@@ -104,13 +104,11 @@ def run_one_lr(
 
 
 def plot_lr_sweep_comparison(sp_path: Path, mup_results: list[dict], save_path: Path) -> None:
-    """Overlay SP and µP LR sweep curves on the same axes."""
     try:
         import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots(figsize=(9, 5))
 
-        # µP curve
         lrs_mup = [r["lr"] for r in mup_results]
         vls_mup = [r["val_loss"] for r in mup_results]
         best_mup = min(mup_results, key=lambda r: r["val_loss"])
@@ -119,7 +117,6 @@ def plot_lr_sweep_comparison(sp_path: Path, mup_results: list[dict], save_path: 
                    color="darkorange", s=150, marker="*", zorder=6,
                    label=f"µP best: lr={best_mup['lr']:.1e}, val={best_mup['val_loss']:.4f}")
 
-        # SP curve (if available)
         if sp_path.exists():
             with open(sp_path) as f:
                 sp = json.load(f)
@@ -212,7 +209,6 @@ def main():
         json.dump(sweep_result, f, indent=2)
     print(f"Results saved to {out_path}")
 
-    # Overlay plot vs SP sweep
     plot_lr_sweep_comparison(
         sp_path=log_dir / "lr_sweep_sp.json",
         mup_results=results,

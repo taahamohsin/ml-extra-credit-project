@@ -36,10 +36,6 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.model import TransformerLM
 
 
-# ---------------------------------------------------------------------------
-# Per-SVG checks
-# ---------------------------------------------------------------------------
-
 def evaluate_one(svg: str) -> dict:
     """Run all per-sample checks on one SVG string. Returns boolean flags."""
     out = {
@@ -89,15 +85,10 @@ def render_to_png(svg: str, png_path: Path, output_size: int = 256) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Sample evaluation
-# ---------------------------------------------------------------------------
-
 def evaluate_directory(
     svg_dir: Path,
     rendered_dir: Path,
 ) -> dict:
-    """Evaluate every .svg in a directory and render valid ones to PNG."""
     files = sorted(svg_dir.glob("*.svg"))
     counts = {"total": len(files), "xml_valid": 0, "has_svg_root": 0,
               "tags_closed": 0, "svg_renderable": 0}
@@ -130,10 +121,6 @@ def evaluate_directory(
     return {"counts": counts, "rates": rates, "per_file": per_file}
 
 
-# ---------------------------------------------------------------------------
-# Test-set perplexity
-# ---------------------------------------------------------------------------
-
 @torch.no_grad()
 def compute_test_perplexity(
     ckpt_path: Path,
@@ -144,10 +131,7 @@ def compute_test_perplexity(
     max_batches: int = 200,
     use_bf16: bool = True,
 ) -> dict:
-    """Compute mean cross-entropy and perplexity on a slice of the test set.
-
-    Reads contiguous, non-overlapping windows from test.bin (no random sampling
-    — every token is scored at most once)."""
+    """Non-overlapping windows from test.bin; every token scored at most once."""
     print(f"\n=== Test-set perplexity ===")
     print(f"  Checkpoint: {ckpt_path}")
     print(f"  Test bin:   {test_bin_path}")
@@ -213,10 +197,6 @@ def compute_test_perplexity(
     }
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", default="outputs/checkpoints/xl/best.pt")
@@ -255,7 +235,6 @@ def main():
         "prefix":        prefix,
     }
 
-    # ---- Combined rates across all samples ----
     combo_counts = {k: uncond["counts"][k] + prefix["counts"][k]
                     for k in uncond["counts"]}
     combo_rates = {
@@ -267,7 +246,6 @@ def main():
     for k, v in combo_rates.items():
         print(f"  {k}: {v*100:.1f}%")
 
-    # ---- Test-set perplexity ----
     if not args.skip_perplexity:
         ckpt_path = REPO_ROOT / args.checkpoint
         test_bin  = REPO_ROOT / args.test_bin
@@ -285,7 +263,6 @@ def main():
             print(f"  ckpt: {ckpt_path}  exists={ckpt_path.exists()}")
             print(f"  test: {test_bin}  exists={test_bin.exists()}")
 
-    # ---- Save metrics ----
     metrics_path = REPO_ROOT / args.metrics_path
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     with open(metrics_path, "w") as f:

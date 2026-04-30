@@ -61,9 +61,6 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    # ------------------------------------------------------------------
-    # Load source checkpoint — weights + config only; schedule resets
-    # ------------------------------------------------------------------
     src_path = REPO_ROOT / args.source_checkpoint
     if not src_path.exists():
         raise FileNotFoundError(f"Source checkpoint not found: {src_path}")
@@ -86,9 +83,6 @@ def main():
     print(f"  Source step:    {ckpt.get('step', '?')}")
     print(f"  Source val:     {ckpt.get('best_val_loss', float('nan')):.4f}")
 
-    # ------------------------------------------------------------------
-    # Compute step budget for extra_epochs
-    # ------------------------------------------------------------------
     binary_dir = REPO_ROOT / dcfg["paths"]["binary_dir"]
     train_tokens = len(np.memmap(str(binary_dir / "train.bin"), dtype=np.uint16, mode="r"))
 
@@ -110,9 +104,6 @@ def main():
     print(f"  Grad accum:      {grad_accum}  (per-step batch = {batch_size})")
     print(f"  Peak LR:         {args.lr:.2e}")
 
-    # ------------------------------------------------------------------
-    # Datasets
-    # ------------------------------------------------------------------
     train_samples = total_steps * batch_size
     train_ds, val_ds = make_datasets(
         binary_dir,
@@ -127,9 +118,6 @@ def main():
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
                               num_workers=2, pin_memory=(device.type == "cuda"))
 
-    # ------------------------------------------------------------------
-    # Optimizer — fresh state; base LRs captured after construction
-    # ------------------------------------------------------------------
     optimizer = build_optimizer(
         model,
         lr=args.lr,
@@ -137,18 +125,12 @@ def main():
         weight_decay=tcfg["optimizer"]["weight_decay"],
     )
 
-    # ------------------------------------------------------------------
-    # Output dirs — isolated from the original xl/ tree
-    # ------------------------------------------------------------------
     model_name      = "xl_extended"
     local_ckpt_dir  = Path("/tmp/checkpoints_local")
     drive_ckpt_dir  = REPO_ROOT / "outputs" / "checkpoints"
     log_dir         = REPO_ROOT / "outputs" / "logs"
     log_path        = log_dir / f"training_{model_name}.csv"
 
-    # ------------------------------------------------------------------
-    # Train config — schedule resets (resume_from=None)
-    # ------------------------------------------------------------------
     train_cfg = {
         "model_name":          model_name,
         "learning_rate":       args.lr,
@@ -183,9 +165,6 @@ def main():
 
     wall_min = (time.time() - t_start) / 60
 
-    # ------------------------------------------------------------------
-    # Save result JSON
-    # ------------------------------------------------------------------
     log_dir.mkdir(parents=True, exist_ok=True)
     result = {
         "model_name":       model_name,

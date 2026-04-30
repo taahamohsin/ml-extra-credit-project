@@ -1,10 +1,8 @@
 """
 05_train_model.py
 -----------------
-Train a single transformer model for exactly 1 epoch on the SVG dataset.
-
-Local-first I/O: all heavy computation runs on local /tmp/ disk.
-Checkpoints and logs are copied to Drive only at eval/ckpt intervals.
+Train a single transformer model for 1 epoch on the SVG dataset.
+Checkpoints are written to /tmp/ first, then copied to Drive.
 
 Usage:
     python scripts/05_train_model.py --model_name tiny [--lr 1e-3] [--batch_size 64] [--resume]
@@ -29,10 +27,6 @@ from src.dataset import make_datasets
 from src.training_utils import build_optimizer, train
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def count_train_tokens(binary_dir: Path) -> int:
     arr = np.memmap(str(binary_dir / "train.bin"), dtype=np.uint16, mode="r")
     return len(arr)
@@ -45,10 +39,6 @@ def find_latest_checkpoint(ckpt_dir: Path, model_name: str) -> Path | None:
     ckpts = sorted(model_ckpt_dir.glob("step_*.pt"))
     return ckpts[-1] if ckpts else None
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser()
@@ -67,9 +57,6 @@ def main():
     parser.add_argument("--data_config",     default="configs/data_config.yaml")
     args = parser.parse_args()
 
-    # -----------------------------------------------------------------------
-    # Load configs
-    # -----------------------------------------------------------------------
     with open(REPO_ROOT / args.model_config) as f:
         mcfg = yaml.safe_load(f)
     with open(REPO_ROOT / args.training_config) as f:
@@ -79,19 +66,12 @@ def main():
 
     binary_dir  = REPO_ROOT / dcfg["paths"]["binary_dir"]
     log_dir     = REPO_ROOT / "outputs" / "logs"
-    # Local-first: all heavy writes go to /tmp/, then copied to Drive (via outputs/ symlink)
     local_ckpt_dir = Path("/tmp/checkpoints_local")
     drive_ckpt_dir = REPO_ROOT / "outputs" / "checkpoints"
 
-    # -----------------------------------------------------------------------
-    # Device
-    # -----------------------------------------------------------------------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    # -----------------------------------------------------------------------
-    # Build model
-    # -----------------------------------------------------------------------
     model_name = args.model_name
     model = build_model(model_name)
     model = model.to(device)
@@ -104,9 +84,6 @@ def main():
     n_params = (model._orig_mod if hasattr(model, "_orig_mod") else model).count_parameters()
     print(f"Model: {model_name}  |  Non-emb params: {n_params:,}")
 
-    # -----------------------------------------------------------------------
-    # Datasets
-    # -----------------------------------------------------------------------
     n_train_tokens  = count_train_tokens(binary_dir)
     effective_batch = args.batch_size or tcfg["batch_size"]  # total seqs/step
     grad_accum      = args.grad_accum or tcfg.get("grad_accum_steps", 1)
@@ -132,9 +109,6 @@ def main():
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
                               num_workers=2, pin_memory=(device.type == "cuda"))
 
-    # -----------------------------------------------------------------------
-    # Optimizer
-    # -----------------------------------------------------------------------
     peak_lr = args.lr or tcfg["learning_rate"]
     optimizer = build_optimizer(
         model,
@@ -143,9 +117,6 @@ def main():
         weight_decay=tcfg["optimizer"]["weight_decay"],
     )
 
-    # -----------------------------------------------------------------------
-    # Resume
-    # -----------------------------------------------------------------------
     resume_from = None
     if args.resume:
         resume_from = find_latest_checkpoint(local_ckpt_dir, model_name)
@@ -157,9 +128,6 @@ def main():
         else:
             print("No checkpoint found — starting from scratch.")
 
-    # -----------------------------------------------------------------------
-    # Training config dict
-    # -----------------------------------------------------------------------
     train_cfg = {
         "model_name":          model_name,
         "learning_rate":       peak_lr,
@@ -176,9 +144,6 @@ def main():
 
     log_path = log_dir / f"training_{model_name}.csv"
 
-    # -----------------------------------------------------------------------
-    # Print summary
-    # -----------------------------------------------------------------------
     print("\n" + "=" * 60)
     print(f"Training: {model_name.upper()}")
     print("=" * 60)
@@ -193,9 +158,6 @@ def main():
     print(f"  Log:             {log_path}")
     print("=" * 60)
 
-    # -----------------------------------------------------------------------
-    # Train
-    # -----------------------------------------------------------------------
     t_start = time.time()
     summary = train(
         model=model,
@@ -212,15 +174,11 @@ def main():
 
     wall_min = (time.time() - t_start) / 60
 
-    # -----------------------------------------------------------------------
-    # Save results summary to JSON
-    # -----------------------------------------------------------------------
     results_dir = REPO_ROOT / "outputs" / "logs"
     results_dir.mkdir(parents=True, exist_ok=True)
     result = {
         "model_name":      model_name,
         "n_params":        n_params,
-        # See scripts/07_train_mup.py for why both are saved.
         "final_val_loss":  summary.get("final_val_loss", summary["best_val_loss"]),
         "best_val_loss":   summary["best_val_loss"],
         "tokens_seen":     summary["tokens_seen"],

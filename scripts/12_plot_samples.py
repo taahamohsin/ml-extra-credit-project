@@ -38,10 +38,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def render_svg_string_to_array(svg: str, output_size: int = 256):
     """Render an SVG string to a numpy image array. Returns None on failure."""
     try:
@@ -79,10 +75,6 @@ def find_rendered_path(rendered_dir: Path, svg_filename: str) -> Path:
     """Map foo.svg → rendered/foo.png (in the corresponding subdir)."""
     return rendered_dir / Path(svg_filename).with_suffix(".png").name
 
-
-# ---------------------------------------------------------------------------
-# Plot 1: Unconditional grid
-# ---------------------------------------------------------------------------
 
 def plot_unconditional_grid(
     manifest: dict,
@@ -126,10 +118,6 @@ def plot_unconditional_grid(
     plt.close()
     print(f"Saved: {out_path}")
 
-
-# ---------------------------------------------------------------------------
-# Plot 2: Temperature comparison
-# ---------------------------------------------------------------------------
 
 def plot_temperature_comparison(
     manifest: dict,
@@ -180,10 +168,6 @@ def plot_temperature_comparison(
     plt.close()
     print(f"Saved: {out_path}")
 
-
-# ---------------------------------------------------------------------------
-# Plot 3: Prefix completion (prefix-only render vs full completion)
-# ---------------------------------------------------------------------------
 
 def plot_prefix_completion(
     manifest: dict,
@@ -251,10 +235,6 @@ def plot_prefix_completion(
     plt.close()
     print(f"Saved: {out_path}")
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
     ap = argparse.ArgumentParser()
