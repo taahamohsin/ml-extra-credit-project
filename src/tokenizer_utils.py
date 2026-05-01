@@ -91,8 +91,12 @@ def train_tokenizer(
     # at vocab_size=161. File-based training avoids this.
     import tempfile, os
     print(f"Writing {len(svg_texts):,} SVGs to temp file for tokenizer training ...")
+    # Prefer /content (Colab local disk, ~100 GB) over /tmp (~200 MB) so large
+    # corpora don't silently truncate the temp file and starve the BPE trainer.
+    tmp_dir = "/content" if os.path.isdir("/content") else None
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
-                                     delete=False, encoding="utf-8") as tmp:
+                                     delete=False, encoding="utf-8",
+                                     dir=tmp_dir) as tmp:
         tmp_path = tmp.name
         for text in svg_texts:
             tmp.write(text + "\n")
