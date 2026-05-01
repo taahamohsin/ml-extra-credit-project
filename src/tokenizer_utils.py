@@ -93,13 +93,26 @@ def train_tokenizer(
     print(f"Writing {len(svg_texts):,} SVGs to temp file for tokenizer training ...")
     # Prefer /content (Colab local disk, ~100 GB) over /tmp (~200 MB) so large
     # corpora don't silently truncate the temp file and starve the BPE trainer.
+    #
+    # Hard-wrap to MAX_TRAINING_LINE_LEN characters: ByteLevel(use_regex=False)
+    # treats each line as one "word", and BPE merge-computation cost scales
+    # with word length squared per merge. Stack SVGs in the balanced corpus
+    # are often 2–10 KB minified single lines, which makes the trainer take
+    # tens of minutes per merge × 4096 merges. Phase 1 worked because
+    # icons/fonts SVGs averaged ~500 chars. Wrapping to 512-char lines
+    # preserves every byte (no content lost) while keeping merge time sane.
+    # The resulting tokenizer encodes full-length SVGs identically because
+    # encoding sees one line at a time at inference, and the merges learned
+    # from chunks generalize byte-for-byte to longer sequences.
+    MAX_TRAINING_LINE_LEN = 512
     tmp_dir = "/content" if os.path.isdir("/content") else None
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
                                      delete=False, encoding="utf-8",
                                      dir=tmp_dir) as tmp:
         tmp_path = tmp.name
         for text in svg_texts:
-            tmp.write(text + "\n")
+            for i in range(0, len(text), MAX_TRAINING_LINE_LEN):
+                tmp.write(text[i : i + MAX_TRAINING_LINE_LEN] + "\n")
     print(f"Temp file: {tmp_path}  ({os.path.getsize(tmp_path) / 1e6:.1f} MB)")
 
     try:
