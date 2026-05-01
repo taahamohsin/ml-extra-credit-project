@@ -142,7 +142,24 @@ def main():
     ap.add_argument("--top_k", type=int, default=50)
     ap.add_argument("--top_p", type=float, default=0.95)
     ap.add_argument("--seed_base", type=int, default=12345)
+    ap.add_argument(
+        "--prompt_ids_override",
+        type=str,
+        default=None,
+        help="Comma-separated token IDs to use as the unconditional prompt "
+             "(e.g. '1,456'). Overrides the default [BOS_ID, 1024] which is "
+             "the original Phase 1 tokenizer's header-token ID. Required when "
+             "generating with any tokenizer trained on a different corpus, "
+             "since the BPE merge order differs and 1024 will mean something "
+             "else (or be out of vocab).",
+    )
     args = ap.parse_args()
+
+    if args.prompt_ids_override:
+        uncond_prompt_ids = [int(x) for x in args.prompt_ids_override.split(",")]
+        print(f"Using prompt_ids_override: {uncond_prompt_ids}")
+    else:
+        uncond_prompt_ids = [BOS_ID, 1024]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
@@ -186,7 +203,7 @@ def main():
                 max_new_tokens=args.max_new_tokens,
                 device=device,
                 seed=seed,
-                prompt_ids=[BOS_ID, 1024],  # token 1024 = full SVG header, guaranteed boundary
+                prompt_ids=uncond_prompt_ids,  # exact token boundary; default is original-tokenizer header (id=1024)
             )
             fname = f"uncond_t{temp:.1f}_{k:02d}.svg"
             (uncond_dir / fname).write_text(text, encoding="utf-8")
