@@ -27,7 +27,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.model import MODEL_CONFIGS
+from src.model import MODEL_CONFIGS, WIDTH_ONLY_CONFIGS, ALL_CONFIGS
 from src.model_mup import build_mup_model, build_mup_optimizer
 from src.dataset import make_datasets
 from src.training_utils import train
@@ -50,14 +50,21 @@ def find_latest_checkpoint(ckpt_dir: Path, model_name: str) -> Path | None:
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config_family", default="default",
+                        choices=["default", "width_only"],
+                        help="Model config family: 'default' (tiny…xl) or 'width_only' (w_xs…w_xl)")
     parser.add_argument("--model_name",  default="tiny",
-                        choices=list(MODEL_CONFIGS.keys()))
+                        choices=list(ALL_CONFIGS.keys()))
     parser.add_argument("--lr",          type=float, default=None)
     parser.add_argument("--batch_size",  type=int,   default=None)
     parser.add_argument("--grad_accum",  type=int,   default=None,
                         help="Gradient accumulation steps. Per-step batch size "
                              "is divided accordingly; effective batch unchanged.")
     parser.add_argument("--resume",      action="store_true")
+    parser.add_argument("--result_suffix", default="",
+                        help="Suffix appended to result_mup_<model><suffix>.json")
+    parser.add_argument("--ckpt_dir",    default=None,
+                        help="Override checkpoint output dir (default: outputs/checkpoints_mup)")
     parser.add_argument("--model_config",    default="configs/model_configs.yaml")
     parser.add_argument("--training_config", default="configs/training_config.yaml")
     parser.add_argument("--data_config",     default="configs/data_config.yaml")
@@ -73,7 +80,10 @@ def main():
     binary_dir     = REPO_ROOT / dcfg["paths"]["binary_dir"]
     log_dir        = REPO_ROOT / "outputs" / "logs"
     local_ckpt_dir = Path("/tmp/checkpoints_mup_local")
-    drive_ckpt_dir = REPO_ROOT / "outputs" / "checkpoints_mup"
+    drive_ckpt_dir = (
+        REPO_ROOT / args.ckpt_dir if args.ckpt_dir
+        else REPO_ROOT / "outputs" / "checkpoints_mup"
+    )
 
     # Fail fast on --resume (disabled for µP after the attention-scaling patch).
     # Pre-patch checkpoints used bare 1/d_head attention scale and are not
@@ -91,7 +101,7 @@ def main():
     print(f"Device: {device}")
 
     model_name = args.model_name
-    model = build_mup_model(model_name)
+    model = build_mup_model(model_name, config_family=args.config_family)
     model = model.to(device)
 
     if hasattr(torch, "compile"):
@@ -188,7 +198,7 @@ def main():
     }
     results_dir = REPO_ROOT / "outputs" / "logs"
     results_dir.mkdir(parents=True, exist_ok=True)
-    result_path = results_dir / f"result_mup_{model_name}.json"
+    result_path = results_dir / f"result_mup_{model_name}{args.result_suffix}.json"
     with open(result_path, "w") as f:
         json.dump(result, f, indent=2)
 

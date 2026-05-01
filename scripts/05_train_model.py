@@ -22,7 +22,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.model import build_model, MODEL_CONFIGS
+from src.model import build_model, MODEL_CONFIGS, WIDTH_ONLY_CONFIGS, ALL_CONFIGS
 from src.dataset import make_datasets
 from src.training_utils import build_optimizer, train
 
@@ -42,8 +42,11 @@ def find_latest_checkpoint(ckpt_dir: Path, model_name: str) -> Path | None:
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config_family", default="default",
+                        choices=["default", "width_only"],
+                        help="Model config family: 'default' (tiny…xl) or 'width_only' (w_xs…w_xl)")
     parser.add_argument("--model_name",  default="tiny",
-                        choices=list(MODEL_CONFIGS.keys()))
+                        choices=list(ALL_CONFIGS.keys()))
     parser.add_argument("--lr",          type=float, default=None,
                         help="Peak learning rate (overrides training_config.yaml)")
     parser.add_argument("--batch_size",  type=int,   default=None)
@@ -52,6 +55,14 @@ def main():
                              "halved accordingly; effective batch size is unchanged.")
     parser.add_argument("--resume",      action="store_true",
                         help="Resume from last local checkpoint")
+    parser.add_argument("--epochs",      type=int, default=1,
+                        help="Number of epochs to train (default 1). "
+                             "Steps = epochs × (train_tokens // tokens_per_step).")
+    parser.add_argument("--ckpt_dir",    default=None,
+                        help="Override checkpoint output dir (default: outputs/checkpoints)")
+    parser.add_argument("--result_suffix", default="",
+                        help="Suffix appended to result_<model><suffix>.json so balanced "
+                             "runs don't overwrite Phase 2/3 results.")
     parser.add_argument("--model_config",    default="configs/model_configs.yaml")
     parser.add_argument("--training_config", default="configs/training_config.yaml")
     parser.add_argument("--data_config",     default="configs/data_config.yaml")
@@ -67,13 +78,16 @@ def main():
     binary_dir  = REPO_ROOT / dcfg["paths"]["binary_dir"]
     log_dir     = REPO_ROOT / "outputs" / "logs"
     local_ckpt_dir = Path("/tmp/checkpoints_local")
-    drive_ckpt_dir = REPO_ROOT / "outputs" / "checkpoints"
+    drive_ckpt_dir = (
+        REPO_ROOT / args.ckpt_dir if args.ckpt_dir
+        else REPO_ROOT / "outputs" / "checkpoints"
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
     model_name = args.model_name
-    model = build_model(model_name)
+    model = build_model(model_name, config_family=args.config_family)
     model = model.to(device)
 
     # torch.compile if PyTorch 2.0+
@@ -87,15 +101,15 @@ def main():
     n_train_tokens  = count_train_tokens(binary_dir)
     effective_batch = args.batch_size or tcfg["batch_size"]  # total seqs/step
     grad_accum      = args.grad_accum or tcfg.get("grad_accum_steps", 1)
-    # Per-GPU batch size = effective batch / grad_accum (keeps memory flat)
     batch_size      = max(1, effective_batch // grad_accum)
     seq_len         = mcfg.get("max_seq_len", 1024)
-    tokens_per_step = effective_batch * seq_len              # same for all accum values
-    total_steps     = max(1, n_train_tokens // tokens_per_step)
+    tokens_per_step = effective_batch * seq_len
+    steps_per_epoch = max(1, n_train_tokens // tokens_per_step)
+    total_steps     = steps_per_epoch * args.epochs
 
-    print(f"Train tokens: {n_train_tokens:,}  |  steps/epoch: {total_steps:,}")
+    print(f"Train tokens: {n_train_tokens:,}  |  steps/epoch: {steps_per_epoch:,}  |  epochs: {args.epochs}  |  total steps: {total_steps:,}")
 
-    train_samples = total_steps * batch_size
+    train_samples = steps_per_epoch * batch_size  # 1 epoch worth; DataLoader loops internally
     train_ds, val_ds = make_datasets(
         binary_dir,
         seq_len=seq_len,
@@ -151,6 +165,8 @@ def main():
     print(f"  Peak LR:         {peak_lr:.2e}")
     print(f"  Batch size:      {batch_size} seqs/step × {grad_accum} accum = {effective_batch} seqs effective")
     print(f"  Tokens/step:     {tokens_per_step:,}  (seq_len={seq_len})")
+    print(f"  Epochs:          {args.epochs}")
+    print(f"  Steps/epoch:     {steps_per_epoch:,}")
     print(f"  Total steps:     {total_steps:,}")
     print(f"  bf16:            {train_cfg['use_bf16']}")
     print(f"  Local ckpts:     {local_ckpt_dir}/{model_name}/")
@@ -179,6 +195,7 @@ def main():
     result = {
         "model_name":      model_name,
         "n_params":        n_params,
+        "epochs":          args.epochs,
         "final_val_loss":  summary.get("final_val_loss", summary["best_val_loss"]),
         "best_val_loss":   summary["best_val_loss"],
         "tokens_seen":     summary["tokens_seen"],
@@ -187,14 +204,14 @@ def main():
         "wall_time_min":   round(wall_min, 1),
     }
 
-    result_path = results_dir / f"result_{model_name}.json"
+    result_path = results_dir / f"result_{model_name}{args.result_suffix}.json"
     with open(result_path, "w") as f:
         json.dump(result, f, indent=2)
     print(f"\nResult saved to {result_path}")
 
     print("\n" + "=" * 60)
-    print(f"TRAINING COMPLETE — {model_name.upper()}")
-    print(f"  Val loss (final, 1 epoch): {summary.get('final_val_loss', summary['best_val_loss']):.4f}")
+    print(f"TRAINING COMPLETE — {model_name.upper()} ({args.epochs} epoch(s))")
+    print(f"  Val loss (final):  {summary.get('final_val_loss', summary['best_val_loss']):.4f}")
     print(f"  Val loss (best):           {summary['best_val_loss']:.4f}")
     print(f"  Tokens seen:     {summary['tokens_seen']:,}")
     print(f"  Wall time:       {wall_min:.1f} min")
