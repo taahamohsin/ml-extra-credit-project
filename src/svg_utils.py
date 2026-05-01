@@ -22,9 +22,6 @@ from typing import Optional
 from lxml import etree
 
 
-# ---------------------------------------------------------------------------
-# Regex patterns (compiled once at import)
-# ---------------------------------------------------------------------------
 _RE_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _RE_PI = re.compile(r"<\?xml[^?]*\?>", re.IGNORECASE)
 _RE_METADATA_BLOCKS = re.compile(
@@ -36,10 +33,6 @@ _RE_FLOAT = re.compile(r"-?\d+\.\d+")
 _RE_MULTI_SPACE = re.compile(r"[ \t]+")
 _RE_MULTI_NEWLINE = re.compile(r"\n{2,}")
 
-
-# ---------------------------------------------------------------------------
-# Individual cleaning steps
-# ---------------------------------------------------------------------------
 
 def _strip_comments(svg: str) -> str:
     return _RE_COMMENT.sub("", svg)
@@ -80,10 +73,6 @@ def _collapse_whitespace(svg: str) -> str:
     return svg.strip()
 
 
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
 def is_valid_xml(svg: str) -> bool:
     """Return True if the string parses as valid XML via lxml (strict)."""
     try:
@@ -96,10 +85,6 @@ def is_valid_xml(svg: str) -> bool:
 def md5_hash(text: str) -> str:
     return hashlib.md5(text.encode("utf-8")).hexdigest()
 
-
-# ---------------------------------------------------------------------------
-# Main cleaning function
-# ---------------------------------------------------------------------------
 
 def clean_svg(
     raw_svg: str,
@@ -130,35 +115,23 @@ def clean_svg(
     """
     svg = raw_svg
 
-    # Step 1: Strip comments
     svg = _strip_comments(svg)
-
-    # Step 2: Strip processing instructions
     svg = _strip_processing_instructions(svg)
-
-    # Step 3: Strip metadata blocks
     svg = _strip_metadata_blocks(svg)
 
-    # Step 4: Extract <svg>...</svg>
     svg = _extract_svg_root(svg)
     if svg is None:
         return None, "no_svg_root"
 
-    # Step 5: Round floats
     svg = _round_floats(svg, decimal_places=decimal_places)
-
-    # Step 6: Collapse whitespace
     svg = _collapse_whitespace(svg)
 
-    # Step 7: Validate XML
     if not is_valid_xml(svg):
         return None, "invalid_xml"
 
-    # Step 8: Length filter
     if len(svg) < min_length_chars:
         return None, "too_short"
 
-    # Step 9: Deduplication (caller manages the set; we just check)
     if seen_hashes is not None:
         h = md5_hash(svg)
         if h in seen_hashes:
@@ -167,10 +140,6 @@ def clean_svg(
 
     return svg, "ok"
 
-
-# ---------------------------------------------------------------------------
-# Batch cleaning
-# ---------------------------------------------------------------------------
 
 def clean_svg_batch(
     raw_svgs: list[str],
@@ -212,17 +181,8 @@ def clean_svg_batch(
     return cleaned, stats
 
 
-# ---------------------------------------------------------------------------
-# Rendering (optional — requires cairosvg)
-# ---------------------------------------------------------------------------
-
 def render_svg_to_png(svg: str, output_size: int = 256) -> Optional[bytes]:
-    """
-    Render an SVG string to a PNG bytes object.
-    Returns None if rendering fails (e.g., unsupported features).
-
-    Requires: cairosvg
-    """
+    """Render an SVG string to PNG bytes. Returns None on failure."""
     try:
         import cairosvg
         return cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=output_size)

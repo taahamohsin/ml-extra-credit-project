@@ -45,7 +45,6 @@ class SVGTokenDataset(Dataset):
         self.data = np.memmap(str(self.bin_path), dtype=np.uint16, mode="r")
         self.n_tokens = len(self.data)
 
-        # Need at least seq_len + 1 tokens to produce one (input, target) pair
         assert self.n_tokens > seq_len, (
             f"{self.bin_path} has only {self.n_tokens} tokens; "
             f"need > {seq_len}"

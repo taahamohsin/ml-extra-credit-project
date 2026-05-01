@@ -33,10 +33,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 
-# ---------------------------------------------------------------------------
-# LR schedule
-# ---------------------------------------------------------------------------
-
 def get_lr(
     step: int,
     peak_lr: float,
@@ -85,10 +81,6 @@ def apply_lr(optimizer, base_lrs: list, factor: float) -> None:
         pg["lr"] = blr * factor
 
 
-# ---------------------------------------------------------------------------
-# Optimizer factory
-# ---------------------------------------------------------------------------
-
 def build_optimizer(
     model: nn.Module,
     lr: float,
@@ -116,10 +108,6 @@ def build_optimizer(
     return torch.optim.AdamW(param_groups, lr=lr, betas=betas)
 
 
-# ---------------------------------------------------------------------------
-# CSV logger
-# ---------------------------------------------------------------------------
-
 class CSVLogger:
     """Appends one row per step to a CSV file."""
 
@@ -143,10 +131,6 @@ class CSVLogger:
             writer.writerow(row)
 
 
-# ---------------------------------------------------------------------------
-# Checkpoint helpers
-# ---------------------------------------------------------------------------
-
 def save_checkpoint(
     path: Path,
     step: int,
@@ -166,7 +150,6 @@ def save_checkpoint(
     capturing post-resume would snapshot a scheduled value, not the µP base."""
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Unwrap compiled model if needed
     raw_model = model._orig_mod if hasattr(model, "_orig_mod") else model
 
     ckpt = {
@@ -209,10 +192,6 @@ def load_checkpoint(
     return ckpt
 
 
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
 @torch.no_grad()
 def evaluate(
     model: nn.Module,
@@ -240,10 +219,6 @@ def evaluate(
     model.train()
     return total_loss / max(n, 1)
 
-
-# ---------------------------------------------------------------------------
-# Main training loop
-# ---------------------------------------------------------------------------
 
 def train(
     model: nn.Module,
@@ -303,7 +278,6 @@ def train(
         print(f"  Resumed at step {start_step}, best_val_loss={best_val_loss:.4f}")
 
     model.train()
-    scaler = None  # bf16 doesn't need a GradScaler
 
     t0           = time.time()
     last_log_t   = t0
@@ -326,13 +300,10 @@ def train(
 
         x, y = x.to(device), y.to(device)
 
-        # Set LR — multiplicative against captured per-group base LRs so
-        # MuAdamW's per-group multipliers survive.
         factor = get_lr_factor(step, warmup_steps, total_steps)
         apply_lr(optimizer, base_lrs, factor)
-        lr = base_lrs[0] * factor  # for logging only — matches previous semantics for AdamW
+        lr = base_lrs[0] * factor  # for logging only
 
-        # Forward + backward
         if use_bf16:
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
                 _, loss = model(x, y)
@@ -346,9 +317,8 @@ def train(
         tokens_seen += x.numel()
 
         if micro_step < grad_accum_steps:
-            continue  # accumulate more gradients
+            continue
 
-        # Optimizer step
         if grad_clip > 0:
             nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
@@ -362,7 +332,7 @@ def train(
         val_loss = None
         if step % eval_interval == 0 or step == total_steps - 1:
             val_loss = evaluate(model, val_loader, device, use_bf16=use_bf16)
-            final_val_loss = val_loss  # most recent eval; persists as "final" after the last eval
+            final_val_loss = val_loss
             is_best  = val_loss < best_val_loss
             if is_best:
                 best_val_loss = val_loss
@@ -391,7 +361,6 @@ def train(
                     gpu_memory_mb=round(gpu_mem_mb, 1),
                 )
 
-            # Checkpointing — every ckpt_interval steps AND when we have a new best
             if step % ckpt_interval == 0 or is_best or step == total_steps - 1:
                 ckpt_name = f"step_{step:07d}.pt"
                 local_path = local_ckpt_dir / model_name / ckpt_name
@@ -412,7 +381,6 @@ def train(
                     drive_path=drive_path,
                 )
         else:
-            # Log train loss at every step (no val)
             if step % 50 == 0:
                 wall_time = time.time() - t0
                 print(

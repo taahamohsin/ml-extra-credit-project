@@ -1,0 +1,54 @@
+# Data pipeline config for the balanced dataset (Phase 4b).
+# Outputs go to *_balanced directories — Phase 2/3 outputs are untouched.
+
+datasets:
+  primary: "starvector/svg-icons-simple"       # all ~80K
+  supplementary:
+    - "starvector/svg-emoji-simple"             # all ~4K
+    - "starvector/svg-fonts-simple"             # subsampled to ~200K
+    - "starvector/svg-stack-simple"             # subsampled to ~50K
+
+  target_train_tokens: 100_000_000
+
+  # Subsample fractions: fonts ~1M rows → 0.20 ≈ 200K; stack size TBD → cap at 50K
+  fonts_subsample_fraction: 0.20
+  stack_subsample_fraction: 1.0    # use max_samples cap instead (50K hard cap)
+  stack_max_samples: 50000
+
+cleaning:
+  min_length_chars: 50
+  max_token_length: 1024
+  decimal_places: 1
+  strip_comments: true
+  strip_processing_instructions: true
+  strip_metadata_blocks: true
+  validate_xml: true
+  deduplicate: true
+
+tokenizer:
+  vocab_size: 4096
+  sample_size: 150000
+  type: "BPE"
+  pre_tokenizer: "ByteLevel"
+  special_tokens:
+    pad: "<PAD>"    # id 0
+    bos: "<BOS>"    # id 1
+    eos: "<EOS>"    # id 2
+    unk: "<UNK>"    # id 3
+
+splitting:
+  train_fraction: 0.98
+  val_fraction: 0.01
+  test_fraction: 0.01
+  seed: 42
+
+paths:
+  raw_data_dir: "outputs/data/raw_balanced"
+  cleaned_data_dir: "outputs/data/cleaned_balanced"
+  tokenizer_dir: "outputs/tokenizer_balanced"
+  binary_dir: "outputs/data/binary_balanced"
+  stats_file: "outputs/data/dataset_stats_balanced.json"
+  plots_dir: "outputs/plots"
+
+num_workers: 4
+seed: 42

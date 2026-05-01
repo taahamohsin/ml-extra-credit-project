@@ -27,13 +27,8 @@ from mup import MuSharedReadout, set_base_shapes
 from mup.init import normal_ as mup_normal_
 from mup.optim import MuAdamW
 
-from src.model import ModelConfig, MODEL_CONFIGS, FeedForward, TransformerBlock
+from src.model import ModelConfig, MODEL_CONFIGS, WIDTH_ONLY_CONFIGS, get_config, FeedForward, TransformerBlock
 
-
-# ---------------------------------------------------------------------------
-# µP base width — moved above MupCausalSelfAttention because the attention
-# scaling formula references BASE_HEAD_DIM.
-# ---------------------------------------------------------------------------
 
 BASE_HEAD_DIM = 32   # d_head used in every model's base for set_base_shapes
 
@@ -106,10 +101,6 @@ class MupTransformerBlock(nn.Module):
         return x
 
 
-# ---------------------------------------------------------------------------
-# Full µP model
-# ---------------------------------------------------------------------------
-
 class MupTransformerLM(nn.Module):
     """
     Decoder-only transformer with µP parameterization.
@@ -127,8 +118,6 @@ class MupTransformerLM(nn.Module):
         self.blocks = nn.ModuleList([MupTransformerBlock(cfg) for _ in range(cfg.n_layers)])
         self.ln_f   = nn.LayerNorm(cfg.d_model)
 
-        # MuSharedReadout: weight-tied output head, µP-aware
-        # output_mult scales the logits; default 1.0 is correct here.
         self.lm_head = MuSharedReadout(self.token_emb.weight, bias=False)
 
         # NOTE: init is deferred to mup_init() in build_mup_model, called
@@ -140,15 +129,12 @@ class MupTransformerLM(nn.Module):
         """µP-aware init. Must be called AFTER set_base_shapes."""
         for module in self.modules():
             if isinstance(module, nn.Linear):
-                # mup_normal_ scales std by 1/sqrt(fan_in_ratio) for hidden weights
                 mup_normal_(module.weight, mean=0.0, std=0.02)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
-                # Embedding is a "input" layer in µP — uses standard init (no width scaling)
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-        # GPT-2 residual-projection scaling (1/sqrt(2*n_layers)) on top of µP
         for name, p in self.named_parameters():
             if name.endswith("out_proj.weight") or name.endswith("net.2.weight"):
                 mup_normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * self.cfg.n_layers))
@@ -168,7 +154,7 @@ class MupTransformerLM(nn.Module):
             x = block(x)
 
         x = self.ln_f(x)
-        logits = self.lm_head(x)  # (B, T, vocab_size)
+        logits = self.lm_head(x)
 
         loss = None
         if targets is not None:
@@ -220,53 +206,44 @@ class MupTransformerLM(nn.Module):
         return sum(p.numel() for p in self.parameters()) - emb_params
 
 
-# ---------------------------------------------------------------------------
-# Base shapes helper
-# ---------------------------------------------------------------------------
-
-# µP base width — the "proxy" width that every target is scaled relative to.
-# Default base_d_model = n_heads * BASE_HEAD_DIM, so the BASE model has
-# d_head = BASE_HEAD_DIM. Wider targets may have larger d_head (e.g. Medium
-# with n_heads=6 and d_model=384 has d_head=64). This makes the attention
-# head dimension part of the width scaling: the µP attention scale
-# √(BASE_HEAD_DIM)/d_head matches SP's 1/√d_head at the base width and
-# shrinks as 1/d_head for wider targets — the µP-prescribed deviation.
-# (BASE_HEAD_DIM is defined near the top of this file because attention
-# scaling needs it.)
-
-
-def build_mup_model(name: str, base_d_model: Optional[int] = None, **overrides) -> MupTransformerLM:
+def build_mup_model(
+    name: str,
+    base_d_model: Optional[int] = None,
+    config_family: str = "default",
+    **overrides,
+) -> MupTransformerLM:
     """
     Build a µP model and apply base shapes in-memory.
 
-    The base/delta pair shares n_layers and n_heads with the target (mup
-    requires identical parameter names across base/target). Default
-    base_d_model = n_heads * BASE_HEAD_DIM, so the base has d_head =
-    BASE_HEAD_DIM = 32. d_ff scales proportionally with d_model so width
-    ratios are non-trivial for the deeper targets.
+    For config_family='default': base_d_model defaults to n_heads * BASE_HEAD_DIM
+    per target (the original behaviour). Width_mult varies per model.
 
-    width_mult per target with the default base sizing:
-      Tiny:   target d=128, base=4*32=128  → 1×  (proxy base — no-op)
-      Small:  target d=192, base=6*32=192  → 1×  (also no-op; same d_head=32)
-      Medium: target d=384, base=6*32=192  → 2×  (d_head: 32 base → 64 target)
-      Large:  target d=512, base=8*32=256  → 2×  (d_head: 32 base → 64 target)
-      XL:     target d=768, base=12*32=384 → 2×  (d_head: 32 base → 64 target)
+    For config_family='width_only': base_d_model is fixed at 128 (= n_heads *
+    BASE_HEAD_DIM = 4 * 32) for every target. This makes w_xs the literal base
+    (width_mult=1) and every larger model has a non-trivial, unambiguous
+    width_mult. This is the clean confound-free setup µP is designed for:
 
-    Callers (e.g. coord check) may override base_d_model to pin a fixed base
-    across multiple targets and produce non-trivial width_mult for diagnostics.
+      w_xs:    d=128, width_mult=1 (IS the base — no-op)
+      w_small: d=192, width_mult=1.5
+      w_medium:d=256, width_mult=2
+      w_large: d=384, width_mult=3
+      w_xl:    d=512, width_mult=4
+
+    Callers may still override base_d_model to pin any explicit base width.
     """
     import dataclasses
     from mup import make_base_shapes
 
-    cfg   = dataclasses.replace(MODEL_CONFIGS[name], **overrides)
+    cfg   = dataclasses.replace(get_config(name, config_family), **overrides)
     model = MupTransformerLM(cfg)
 
-    # Default base_d_model: n_heads * BASE_HEAD_DIM, which keeps d_head fixed
-    # at BASE_HEAD_DIM. Callers (e.g. coord check) may override to pin the
-    # base across multiple targets so width_mult is non-trivial.
     if base_d_model is None:
-        base_d_model = cfg.n_heads * BASE_HEAD_DIM
-    # Scale d_ff with d_model so the d_ff/d_model ratio is preserved
+        if config_family == "width_only":
+            # Fixed base: w_xs is the base for all width_only models.
+            base_d_model = 4 * BASE_HEAD_DIM  # = 128
+        else:
+            base_d_model = cfg.n_heads * BASE_HEAD_DIM
+
     base_d_ff    = cfg.d_ff * base_d_model // cfg.d_model
 
     base_cfg  = dataclasses.replace(cfg, d_model=base_d_model,     d_ff=base_d_ff)
@@ -274,13 +251,9 @@ def build_mup_model(name: str, base_d_model: Optional[int] = None, **overrides) 
 
     base  = MupTransformerLM(base_cfg)
     delta = MupTransformerLM(delta_cfg)
-    # Capture the shapes dict — without it, set_base_shapes can't tell which
-    # dims are infinite (it would otherwise need both base and delta).
     base_shapes = make_base_shapes(base, delta, savefile=None)
     set_base_shapes(model, base_shapes)
 
-    # Init AFTER set_base_shapes so mup_normal_ can read infshape and apply
-    # the correct width-dependent variance scaling.
     model.mup_init()
     return model
 
