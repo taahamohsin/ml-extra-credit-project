@@ -104,14 +104,12 @@ def main():
     all_files = []
     estimated_tokens = 0
 
-    # 1. Icons — all
     icons_svgs = load_and_collect(dcfg["primary"], seed=seed)
     if icons_svgs:
         save_raw_svgs(icons_svgs, raw_dir / "icons_simple.jsonl", "icons-simple")
         all_files.append("icons_simple.jsonl")
         estimated_tokens += len(icons_svgs) * TOKENS_PER_SVG
 
-    # 2. Emoji — all
     supplementary = dcfg.get("supplementary", [])
     supp_iter = iter(supplementary)
 
@@ -124,7 +122,6 @@ def main():
             all_files.append("emoji_simple.jsonl")
             estimated_tokens += len(emoji_svgs) * TOKENS_PER_SVG
 
-    # 3. Fonts — subsampled
     fonts_svgs: list[str] = []
     fonts_name = next(supp_iter, None)
     if fonts_name:
@@ -135,7 +132,6 @@ def main():
             all_files.append("fonts_simple.jsonl")
             estimated_tokens += len(fonts_svgs) * TOKENS_PER_SVG
 
-    # 4. Stack — diversity supplement, hard-capped
     stack_svgs: list[str] = []
     stack_name = next(supp_iter, None)
     if stack_name:

@@ -45,7 +45,6 @@ def run_one_lr(
     use_bf16: bool,
     warmup_steps: int,
 ) -> dict:
-    # w_xs with width_only family: base_d_model=128, width_mult=1 (no-op base)
     model = build_mup_model("w_xs", config_family="width_only").to(device)
     if hasattr(torch, "compile"):
         model = torch.compile(model)
@@ -59,10 +58,20 @@ def run_one_lr(
         train_samples=max_steps * batch_size,
         val_samples=50 * batch_size,
     )
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False,
-                              num_workers=2, pin_memory=(device.type == "cuda"))
-    val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
-                              num_workers=2, pin_memory=(device.type == "cuda"))
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=2,
+        pin_memory=(device.type == "cuda"),
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=2,
+        pin_memory=(device.type == "cuda"),
+    )
 
     model.train()
     optimizer.zero_grad(set_to_none=True)
@@ -99,10 +108,10 @@ def run_one_lr(
     diverged = val_loss > 10.0 or not np.isfinite(val_loss)
 
     return {
-        "lr":        lr,
-        "val_loss":  float(val_loss),
-        "diverged":  diverged,
-        "wall_sec":  round(wall_sec, 1),
+        "lr": lr,
+        "val_loss": float(val_loss),
+        "diverged": diverged,
+        "wall_sec": round(wall_sec, 1),
         "max_steps": max_steps,
     }
 
@@ -117,9 +126,15 @@ def plot_comparison(sp_path: Path, mup_results: list[dict], save_path: Path) -> 
         vls_mup = [r["val_loss"] for r in mup_results]
         best_mup = min(mup_results, key=lambda r: r["val_loss"])
         ax.plot(lrs_mup, vls_mup, "o--", color="darkorange", label="µP", linewidth=1.5)
-        ax.scatter([best_mup["lr"]], [best_mup["val_loss"]],
-                   color="darkorange", s=150, marker="*", zorder=6,
-                   label=f"µP best: lr={best_mup['lr']:.1e}, val={best_mup['val_loss']:.4f}")
+        ax.scatter(
+            [best_mup["lr"]],
+            [best_mup["val_loss"]],
+            color="darkorange",
+            s=150,
+            marker="*",
+            zorder=6,
+            label=f"µP best: lr={best_mup['lr']:.1e}, val={best_mup['val_loss']:.4f}",
+        )
 
         if sp_path.exists():
             with open(sp_path) as f:
@@ -127,9 +142,15 @@ def plot_comparison(sp_path: Path, mup_results: list[dict], save_path: Path) -> 
             lrs_sp = [r["lr"] for r in sp["runs"]]
             vls_sp = [r["val_loss"] for r in sp["runs"]]
             ax.plot(lrs_sp, vls_sp, "o--", color="steelblue", label="SP", linewidth=1.5)
-            ax.scatter([sp["best_lr"]], [sp["best_val_loss"]],
-                       color="steelblue", s=150, marker="*", zorder=6,
-                       label=f"SP best: lr={sp['best_lr']:.1e}, val={sp['best_val_loss']:.4f}")
+            ax.scatter(
+                [sp["best_lr"]],
+                [sp["best_val_loss"]],
+                color="steelblue",
+                s=150,
+                marker="*",
+                zorder=6,
+                label=f"SP best: lr={sp['best_lr']:.1e}, val={sp['best_val_loss']:.4f}",
+            )
 
         ax.set_xscale("log")
         ax.set_xlabel("Learning rate (log scale)")
@@ -149,10 +170,10 @@ def plot_comparison(sp_path: Path, mup_results: list[dict], save_path: Path) -> 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--max_steps",  type=int, default=None)
+    parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--training_config", default="configs/training_config.yaml")
-    parser.add_argument("--data_config",     default="configs/data_config.yaml")
+    parser.add_argument("--data_config", default="configs/data_config.yaml")
     args = parser.parse_args()
 
     with open(REPO_ROOT / args.training_config) as f:
@@ -160,26 +181,28 @@ def main():
     with open(REPO_ROOT / args.data_config) as f:
         dcfg = yaml.safe_load(f)
 
-    binary_dir   = REPO_ROOT / dcfg["paths"]["binary_dir"]
-    log_dir      = REPO_ROOT / "outputs" / "logs"
-    plots_dir    = REPO_ROOT / "outputs" / "plots"
+    binary_dir = REPO_ROOT / dcfg["paths"]["binary_dir"]
+    log_dir = REPO_ROOT / "outputs" / "logs"
+    plots_dir = REPO_ROOT / "outputs" / "plots"
     log_dir.mkdir(parents=True, exist_ok=True)
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    lr_values    = tcfg["lr_sweep"]["lr_values"]
-    max_steps    = args.max_steps or tcfg["lr_sweep"]["max_steps"]
-    batch_size   = args.batch_size or tcfg["batch_size"]
+    lr_values = tcfg["lr_sweep"]["lr_values"]
+    max_steps = args.max_steps or tcfg["lr_sweep"]["max_steps"]
+    batch_size = args.batch_size or tcfg["batch_size"]
     warmup_steps = tcfg["lr_schedule"]["warmup_steps"]
-    use_bf16     = tcfg.get("use_bf16", True)
+    use_bf16 = tcfg.get("use_bf16", True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
-    print(f"µP LR sweep (width_only / w_xs): {len(lr_values)} values × {max_steps} steps each")
+    print(
+        f"µP LR sweep (width_only / w_xs): {len(lr_values)} values × {max_steps} steps each"
+    )
     print(f"LRs: {lr_values}\n")
 
     results = []
     for i, lr in enumerate(lr_values):
-        print(f"[{i+1}/{len(lr_values)}] lr={lr:.1e} ...", end=" ", flush=True)
+        print(f"[{i + 1}/{len(lr_values)}] lr={lr:.1e} ...", end=" ", flush=True)
         result = run_one_lr(
             lr=lr,
             max_steps=max_steps,
@@ -197,16 +220,18 @@ def main():
     results.sort(key=lambda r: r["lr"])
     best = min(results, key=lambda r: r["val_loss"])
 
-    print(f"\nBest µP LR (width_only): {best['lr']:.1e}  →  val_loss={best['val_loss']:.4f}")
+    print(
+        f"\nBest µP LR (width_only): {best['lr']:.1e}  →  val_loss={best['val_loss']:.4f}"
+    )
 
     sweep_result = {
         "parameterization": "mup",
-        "model":            "w_xs",
-        "config_family":    "width_only",
-        "max_steps":        max_steps,
-        "best_lr":          best["lr"],
-        "best_val_loss":    best["val_loss"],
-        "runs":             results,
+        "model": "w_xs",
+        "config_family": "width_only",
+        "max_steps": max_steps,
+        "best_lr": best["lr"],
+        "best_val_loss": best["val_loss"],
+        "runs": results,
     }
     out_path = log_dir / "lr_sweep_width_only_mup.json"
     with open(out_path, "w") as f:
@@ -223,7 +248,9 @@ def main():
     print("-" * 38)
     for r in results:
         marker = "*" if r["lr"] == best["lr"] else " "
-        print(f"{r['lr']:>12.1e} {r['val_loss']:>12.4f} {str(r['diverged']):>10} {marker}")
+        print(
+            f"{r['lr']:>12.1e} {r['val_loss']:>12.4f} {str(r['diverged']):>10} {marker}"
+        )
 
 
 if __name__ == "__main__":

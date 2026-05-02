@@ -90,7 +90,6 @@ def main():
     model = build_model(model_name, config_family=args.config_family)
     model = model.to(device)
 
-    # torch.compile if PyTorch 2.0+
     if hasattr(torch, "compile"):
         print("Compiling model with torch.compile ...")
         model = torch.compile(model)
@@ -135,7 +134,6 @@ def main():
     if args.resume:
         resume_from = find_latest_checkpoint(local_ckpt_dir, model_name)
         if resume_from is None:
-            # Fall back to Drive checkpoint
             resume_from = find_latest_checkpoint(drive_ckpt_dir, model_name)
         if resume_from:
             print(f"Will resume from: {resume_from}")

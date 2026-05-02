@@ -57,10 +57,6 @@ from torch.utils.data import DataLoader
 WIDTH_ONLY_MODEL_ORDER = ["w_xs", "w_small", "w_medium", "w_large", "w_xl"]
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def count_train_tokens(binary_dir: Path) -> int:
     arr = np.memmap(str(binary_dir / "train.bin"), dtype=np.uint16, mode="r")
     return len(arr)
@@ -78,10 +74,6 @@ def load_best_lr(sweep_json: Path, parameterization: str) -> float:
     print(f"  Best {parameterization} LR from sweep: {lr:.1e}  (val={d['best_val_loss']:.4f})")
     return lr
 
-
-# ---------------------------------------------------------------------------
-# SP training
-# ---------------------------------------------------------------------------
 
 def train_sp_model(
     model_name: str,
@@ -180,10 +172,6 @@ def train_sp_model(
     return result
 
 
-# ---------------------------------------------------------------------------
-# µP training
-# ---------------------------------------------------------------------------
-
 def train_mup_model(
     model_name: str,
     peak_lr: float,
@@ -281,10 +269,6 @@ def train_mup_model(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Plotting
-# ---------------------------------------------------------------------------
-
 def plot_combined(
     sp_results:  list[dict],
     mup_results: list[dict],
@@ -332,7 +316,6 @@ def plot_combined(
         plt.close()
         print(f"\nScaling law plot saved to {save_path}")
 
-        # Save fit JSONs
         for fit, label, fname in [
             (sp_fit,  "SP",  "scaling_width_only_sp.json"),
             (mup_fit, "mup", "scaling_width_only_mup.json"),
@@ -373,10 +356,6 @@ def load_results(log_dir: Path, parameterization: str) -> list[dict]:
             print(f"  WARNING: {p.name} not found — skipping {name} from {parameterization} fit")
     return results
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser()
@@ -424,7 +403,6 @@ def main():
         plot_combined(sp_results, mup_results, plots_dir, log_dir)
         return
 
-    # Resolve LRs from sweep JSONs if not given explicitly
     sp_lr  = args.lr_sp
     mup_lr = args.lr_mup
 
@@ -439,7 +417,6 @@ def main():
     sp_results: list[dict] = []
     mup_results: list[dict] = []
 
-    # --- SP ---
     if not args.skip_sp:
         print(f"\n{'='*60}")
         print(f"SP training — width_only family — peak LR {sp_lr:.1e}")
@@ -452,7 +429,6 @@ def main():
         print("\n[skip_sp] Loading existing SP results ...")
         sp_results = load_results(log_dir, "SP")
 
-    # --- µP ---
     if not args.skip_mup:
         print(f"\n{'='*60}")
         print(f"µP training — width_only family — peak LR {mup_lr:.1e}")
@@ -466,7 +442,6 @@ def main():
         print("\n[skip_mup] Loading existing µP results ...")
         mup_results = load_results(log_dir, "mup")
 
-    # --- Summary table ---
     print(f"\n{'='*70}")
     print(f"{'Model':<12} {'N params':>12} {'SP val':>10} {'µP val':>10} {'Δ (mup-sp)':>12}")
     print(f"{'-'*70}")
@@ -485,7 +460,6 @@ def main():
             )
     print(f"{'='*70}")
 
-    # --- Fit and plot ---
     print("\nFitting power laws and generating plots ...")
     plot_combined(sp_results, mup_results, plots_dir, log_dir)
 

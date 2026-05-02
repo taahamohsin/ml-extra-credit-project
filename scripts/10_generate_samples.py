@@ -107,7 +107,6 @@ def generate_one(
         # the processor and prepend BOS manually.
         enc = tokenizer.encode(prompt)
         ids = enc.ids
-        # Strip a trailing EOS the post-processor may have added.
         if ids and ids[-1] == EOS_ID:
             ids = ids[:-1]
         if not ids or ids[0] != BOS_ID:
