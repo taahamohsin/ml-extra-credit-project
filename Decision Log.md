@@ -1,6 +1,6 @@
 # Decision Log - SVG Scaling Laws Project
 
-Notes on design decisions and bugs I ran into. Mostly so I can answer questions about this stuff later, also so the grader can see what was deliberate vs. what I stumbled into.
+Notes on design decisions and bugs I ran into. Mostly to be a living log/reference.
 
 I'm only writing things down that aren't obvious from the code itself. Standard transformer setup choices (AdamW, cosine schedule, etc.) are at the top because they were quick decisions; the longer entries near the bottom are the ones where I actually screwed up at some point.
 
