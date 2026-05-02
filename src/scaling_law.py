@@ -14,18 +14,10 @@ import numpy as np
 from scipy.optimize import curve_fit
 
 
-# ---------------------------------------------------------------------------
-# Functional form
-# ---------------------------------------------------------------------------
-
 def power_law(N: np.ndarray, a: float, alpha: float, c: float) -> np.ndarray:
     """L = a * N^(-alpha) + c"""
     return a * np.power(N, -alpha) + c
 
-
-# ---------------------------------------------------------------------------
-# Fitting
-# ---------------------------------------------------------------------------
 
 def fit_scaling_law(
     param_counts: list[int] | np.ndarray,
@@ -57,7 +49,6 @@ def fit_scaling_law(
     a, alpha, c = popt
     perr = np.sqrt(np.diag(pcov))
 
-    # R²
     L_pred   = power_law(N, *popt)
     ss_res   = np.sum((L - L_pred) ** 2)
     ss_tot   = np.sum((L - L.mean()) ** 2)
@@ -115,10 +106,6 @@ def predict(
     }
 
 
-# ---------------------------------------------------------------------------
-# Plotting
-# ---------------------------------------------------------------------------
-
 def plot_scaling_law(
     param_counts:  list[int] | np.ndarray,
     val_losses:    list[float] | np.ndarray,
@@ -134,7 +121,6 @@ def plot_scaling_law(
     """
     Log-log scatter of (N, L) data + fitted power law curve.
 
-    If ax is provided, draws into that axes (useful for overlaying SP + µP).
     """
     try:
         import matplotlib.pyplot as plt
@@ -149,17 +135,14 @@ def plot_scaling_law(
         if own_fig:
             fig, ax = plt.subplots(figsize=(8, 5))
 
-        # Data points
         ax.scatter(N, L, color=color, s=80, zorder=5,
                    label=f"{label} data")
 
-        # Annotate with model names
         if model_names:
             for name, n, l in zip(model_names, N, L):
                 ax.annotate(name, (n, l), textcoords="offset points",
                             xytext=(6, 4), fontsize=8)
 
-        # Fitted curve
         N_range = np.logspace(np.log10(N.min() * 0.8), np.log10(N.max() * 1.2), 300)
         L_fit   = power_law(N_range, *popt)
         ax.plot(

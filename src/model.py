@@ -22,10 +22,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# ---------------------------------------------------------------------------
-# Model configuration
-# ---------------------------------------------------------------------------
-
 @dataclass
 class ModelConfig:
     vocab_size:   int   = 4096
@@ -41,7 +37,6 @@ class ModelConfig:
             f"d_model ({self.d_model}) must be divisible by n_heads ({self.n_heads})"
 
 
-# 5 predefined scales (blueprint Table 5.1)
 MODEL_CONFIGS: dict[str, ModelConfig] = {
     "tiny":   ModelConfig(d_model=128,  n_layers=4,  n_heads=4,  d_ff=512),
     "small":  ModelConfig(d_model=192,  n_layers=6,  n_heads=6,  d_ff=768),
@@ -50,10 +45,19 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
     "xl":     ModelConfig(d_model=768,  n_layers=12, n_heads=12, d_ff=3072),
 }
 
+# Width-only family: depth and heads are fixed (n_layers=6, n_heads=4) so that
+# only d_model and d_ff scale. This is the clean confound-free setup for µP
+# comparison: width_mult = d_model / 128 is unambiguous for every model.
+WIDTH_ONLY_CONFIGS: dict[str, ModelConfig] = {
+    "w_xs":     ModelConfig(d_model=128,  n_layers=6, n_heads=4, d_ff=512),
+    "w_small":  ModelConfig(d_model=192,  n_layers=6, n_heads=4, d_ff=768),
+    "w_medium": ModelConfig(d_model=256,  n_layers=6, n_heads=4, d_ff=1024),
+    "w_large":  ModelConfig(d_model=384,  n_layers=6, n_heads=4, d_ff=1536),
+    "w_xl":     ModelConfig(d_model=512,  n_layers=6, n_heads=4, d_ff=2048),
+}
 
-# ---------------------------------------------------------------------------
-# Building blocks
-# ---------------------------------------------------------------------------
+ALL_CONFIGS: dict[str, ModelConfig] = {**MODEL_CONFIGS, **WIDTH_ONLY_CONFIGS}
+
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, cfg: ModelConfig):
@@ -68,7 +72,6 @@ class CausalSelfAttention(nn.Module):
         self.attn_drop = nn.Dropout(cfg.dropout)
         self.resid_drop = nn.Dropout(cfg.dropout)
 
-        # Causal mask — registered as buffer so it moves with .to(device)
         self.register_buffer(
             "mask",
             torch.tril(torch.ones(cfg.max_seq_len, cfg.max_seq_len)).view(
@@ -80,7 +83,6 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.shape
         q, k, v = self.qkv_proj(x).split(self.d_model, dim=2)
 
-        # Reshape to (B, n_heads, T, d_head)
         q = q.view(B, T, self.n_heads, self.d_head).transpose(1, 2)
         k = k.view(B, T, self.n_heads, self.d_head).transpose(1, 2)
         v = v.view(B, T, self.n_heads, self.d_head).transpose(1, 2)
@@ -91,8 +93,8 @@ class CausalSelfAttention(nn.Module):
         att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
 
-        y = att @ v                                        # (B, n_heads, T, d_head)
-        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble heads
+        y = att @ v
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
         return self.resid_drop(self.out_proj(y))
 
 
@@ -119,14 +121,10 @@ class TransformerBlock(nn.Module):
         self.ff   = FeedForward(cfg)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.ln1(x))  # pre-norm residual
+        x = x + self.attn(self.ln1(x))
         x = x + self.ff(self.ln2(x))
         return x
 
-
-# ---------------------------------------------------------------------------
-# Full model
-# ---------------------------------------------------------------------------
 
 class TransformerLM(nn.Module):
     """Decoder-only transformer language model."""
@@ -143,7 +141,6 @@ class TransformerLM(nn.Module):
         self.ln_f    = nn.LayerNorm(cfg.d_model)
         self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
 
-        # Weight tying: output projection shares weights with token embedding
         self.lm_head.weight = self.token_emb.weight
 
         self._init_weights()
@@ -157,7 +154,6 @@ class TransformerLM(nn.Module):
             elif isinstance(module, nn.Embedding):
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-        # Scale residual projections by 1/√(2 * n_layers) — GPT-2 init
         for name, p in self.named_parameters():
             if name.endswith("out_proj.weight") or name.endswith("net.2.weight"):
                 nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * self.cfg.n_layers))
@@ -176,14 +172,14 @@ class TransformerLM(nn.Module):
         assert T <= self.cfg.max_seq_len, \
             f"Sequence length {T} exceeds max_seq_len {self.cfg.max_seq_len}"
 
-        pos = torch.arange(T, device=idx.device).unsqueeze(0)  # (1, T)
+        pos = torch.arange(T, device=idx.device).unsqueeze(0)
         x = self.emb_drop(self.token_emb(idx) + self.pos_emb(pos))
 
         for block in self.blocks:
             x = block(x)
 
         x = self.ln_f(x)
-        logits = self.lm_head(x)  # (B, T, vocab_size)
+        logits = self.lm_head(x)
 
         loss = None
         if targets is not None:
@@ -241,27 +237,37 @@ class TransformerLM(nn.Module):
         return total - emb_params
 
 
-# ---------------------------------------------------------------------------
-# Convenience constructors
-# ---------------------------------------------------------------------------
+def get_config(name: str, config_family: str = "default") -> ModelConfig:
+    """Resolve a model name from a config family ('default' or 'width_only')."""
+    if config_family == "width_only":
+        table = WIDTH_ONLY_CONFIGS
+    else:
+        table = MODEL_CONFIGS
+    if name not in table:
+        raise ValueError(
+            f"Unknown model name '{name}' for family '{config_family}'. "
+            f"Choose from: {list(table)}"
+        )
+    return table[name]
 
-def build_model(name: str, **overrides) -> TransformerLM:
-    """Build a model by config name ('tiny', 'small', 'medium', 'large', 'xl')."""
-    if name not in MODEL_CONFIGS:
-        raise ValueError(f"Unknown model name '{name}'. Choose from: {list(MODEL_CONFIGS)}")
+
+def build_model(name: str, config_family: str = "default", **overrides) -> TransformerLM:
+    """Build a model by config name. config_family: 'default' or 'width_only'."""
     import dataclasses
-    cfg = dataclasses.replace(MODEL_CONFIGS[name], **overrides)
+    cfg = dataclasses.replace(get_config(name, config_family), **overrides)
     return TransformerLM(cfg)
 
 
 def print_model_summary() -> None:
-    """Print parameter counts for all 5 model configs."""
-    print(f"\n{'Model':<10} {'d_model':>8} {'n_layers':>9} {'n_heads':>8} {'d_ff':>6} {'Non-emb params':>16}")
-    print("-" * 65)
-    for name, cfg in MODEL_CONFIGS.items():
-        m = TransformerLM(cfg)
-        n = m.count_parameters()
-        print(f"{name:<10} {cfg.d_model:>8} {cfg.n_layers:>9} {cfg.n_heads:>8} {cfg.d_ff:>6} {n:>16,}")
+    """Print parameter counts for all model configs."""
+    for family_name, table in [("default", MODEL_CONFIGS), ("width_only", WIDTH_ONLY_CONFIGS)]:
+        print(f"\n--- {family_name} ---")
+        print(f"{'Model':<12} {'d_model':>8} {'n_layers':>9} {'n_heads':>8} {'d_ff':>6} {'Non-emb params':>16}")
+        print("-" * 67)
+        for name, cfg in table.items():
+            m = TransformerLM(cfg)
+            n = m.count_parameters()
+            print(f"{name:<12} {cfg.d_model:>8} {cfg.n_layers:>9} {cfg.n_heads:>8} {cfg.d_ff:>6} {n:>16,}")
     print()
 
 

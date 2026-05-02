@@ -28,9 +28,6 @@ from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 from tokenizers.processors import TemplateProcessing
 
 
-# ---------------------------------------------------------------------------
-# Special token definitions (order must match ids)
-# ---------------------------------------------------------------------------
 SPECIAL_TOKENS = ["<PAD>", "<BOS>", "<EOS>", "<UNK>"]
 PAD_TOKEN = "<PAD>"
 BOS_TOKEN = "<BOS>"
@@ -42,10 +39,6 @@ BOS_ID = 1
 EOS_ID = 2
 UNK_ID = 3
 
-
-# ---------------------------------------------------------------------------
-# Training
-# ---------------------------------------------------------------------------
 
 def train_tokenizer(
     svg_texts: list[str],
@@ -69,7 +62,6 @@ def train_tokenizer(
     Tokenizer
         A trained HuggingFace tokenizer.
     """
-    # Delete any existing tokenizer so we never silently use a stale cached file
     if save_dir is not None:
         stale = Path(save_dir) / "tokenizer.json"
         if stale.exists():
@@ -94,18 +86,33 @@ def train_tokenizer(
         initial_alphabet=ByteLevel.alphabet(),
     )
 
-    # Write corpus to a temp file and use tokenizer.train() (file-based API).
-    # train_from_iterator on very long single-line documents produces a tiny
-    # vocabulary because the HuggingFace BPE trainer processes the file in
-    # line-sized chunks; with ~80k single-line SVGs it only saw 88 "documents"
-    # in its internal batch, exhausting merges at vocab_size=161.
+    # train_from_iterator on long single-line SVGs produces a tiny vocab
+    # because the HuggingFace BPE trainer batches by line, exhausting merges
+    # at vocab_size=161. File-based training avoids this.
     import tempfile, os
     print(f"Writing {len(svg_texts):,} SVGs to temp file for tokenizer training ...")
+    # Prefer /content (Colab local disk, ~100 GB) over /tmp (~200 MB) so large
+    # corpora don't silently truncate the temp file and starve the BPE trainer.
+    #
+    # Hard-wrap to MAX_TRAINING_LINE_LEN characters: ByteLevel(use_regex=False)
+    # treats each line as one "word", and BPE merge-computation cost scales
+    # with word length squared per merge. Stack SVGs in the balanced corpus
+    # are often 2–10 KB minified single lines, which makes the trainer take
+    # tens of minutes per merge × 4096 merges. Phase 1 worked because
+    # icons/fonts SVGs averaged ~500 chars. Wrapping to 512-char lines
+    # preserves every byte (no content lost) while keeping merge time sane.
+    # The resulting tokenizer encodes full-length SVGs identically because
+    # encoding sees one line at a time at inference, and the merges learned
+    # from chunks generalize byte-for-byte to longer sequences.
+    MAX_TRAINING_LINE_LEN = 512
+    tmp_dir = "/content" if os.path.isdir("/content") else None
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
-                                     delete=False, encoding="utf-8") as tmp:
+                                     delete=False, encoding="utf-8",
+                                     dir=tmp_dir) as tmp:
         tmp_path = tmp.name
         for text in svg_texts:
-            tmp.write(text + "\n")
+            for i in range(0, len(text), MAX_TRAINING_LINE_LEN):
+                tmp.write(text[i : i + MAX_TRAINING_LINE_LEN] + "\n")
     print(f"Temp file: {tmp_path}  ({os.path.getsize(tmp_path) / 1e6:.1f} MB)")
 
     try:
@@ -118,7 +125,6 @@ def train_tokenizer(
     os.unlink(tmp_path)
     print("Temp file deleted.")
 
-    # Add post-processing so encode() automatically wraps with BOS/EOS
     tokenizer.post_processor = TemplateProcessing(
         single=f"{BOS_TOKEN} $A {EOS_TOKEN}",
         special_tokens=[
@@ -131,14 +137,12 @@ def train_tokenizer(
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
         save_path = save_dir / "tokenizer.json"
-        # Write to a temp file first, then rename — avoids partial writes to
-        # Google Drive (which can leave an empty file on crash or flush race).
+        # Atomic write: rename avoids partial writes on Google Drive
         tmp_save = save_path.with_suffix(".tmp")
         try:
             tokenizer.save(str(tmp_save))
             tmp_save.replace(save_path)
             print(f"Tokenizer saved to {save_path}")
-            # Verify the file is non-empty and valid JSON before continuing
             import json as _json
             with open(save_path) as _f:
                 _json.load(_f)
@@ -151,10 +155,6 @@ def train_tokenizer(
     return tokenizer
 
 
-# ---------------------------------------------------------------------------
-# Loading
-# ---------------------------------------------------------------------------
-
 def load_tokenizer(tokenizer_dir: str | Path) -> Tokenizer:
     """Load a previously saved tokenizer from directory."""
     path = Path(tokenizer_dir) / "tokenizer.json"
@@ -162,10 +162,6 @@ def load_tokenizer(tokenizer_dir: str | Path) -> Tokenizer:
         raise FileNotFoundError(f"No tokenizer.json found at {path}")
     return Tokenizer.from_file(str(path))
 
-
-# ---------------------------------------------------------------------------
-# Encoding / decoding helpers
-# ---------------------------------------------------------------------------
 
 def encode(tokenizer: Tokenizer, svg: str, add_special_tokens: bool = True) -> list[int]:
     """Encode a single SVG string to a list of token ids."""
@@ -182,10 +178,6 @@ def token_length(tokenizer: Tokenizer, svg: str) -> int:
     """Return the number of tokens for a given SVG string (includes BOS/EOS)."""
     return len(encode(tokenizer, svg))
 
-
-# ---------------------------------------------------------------------------
-# Tokenizer statistics
-# ---------------------------------------------------------------------------
 
 def compute_tokenizer_stats(
     tokenizer: Tokenizer,
@@ -217,15 +209,9 @@ def compute_tokenizer_stats(
 
 
 def get_top_tokens(tokenizer: Tokenizer, n: int = 50) -> list[tuple[str, int]]:
-    """
-    Return the top-n most common tokens by id (not by corpus frequency).
-    This simply lists vocab entries 4..n+4 (skipping special tokens).
-    For actual corpus frequency analysis, use compute_token_frequencies().
-    """
+    """Return vocab entries 4..n+4 by id (skipping special tokens 0-3)."""
     vocab = tokenizer.get_vocab()
-    # Sort by id
     sorted_vocab = sorted(vocab.items(), key=lambda x: x[1])
-    # Skip special tokens (ids 0-3)
     return [(tok, idx) for tok, idx in sorted_vocab if idx >= len(SPECIAL_TOKENS)][:n]
 
 
